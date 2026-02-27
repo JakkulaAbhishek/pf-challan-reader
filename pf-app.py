@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pdfplumber
 import re
@@ -11,114 +12,73 @@ from fpdf import FPDF
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(page_title="PF AI Command Center", layout="wide", page_icon="📊")
 
-# ---------------- ULTRA PREMIUM UI (GLASSMORPHISM + ANIMATIONS + LUXURY) ----------------
+# ---------------- ULTRA STYLISH UI (GLASSMORPHISM + ANIMATIONS) ----------------
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Playfair+Display:wght@700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');
 
-:root {
-    --bg-deep: #0b1120;
-    --bg-gradient-1: #1a1f35;
-    --bg-gradient-2: #2d1b3a;
-    --accent-primary: #9f7aea;
-    --accent-secondary: #f687b3;
-    --accent-glow: rgba(159, 122, 234, 0.6);
-    --text-light: #f7fafc;
-    --text-muted: #cbd5e0;
-    --card-bg: rgba(20, 30, 50, 0.6);
-    --card-border: rgba(255, 255, 255, 0.1);
-    --glass-blur: 20px;
-}
-
-/* Animated deep gradient background */
-.stApp {
-    background: linear-gradient(135deg, var(--bg-deep), var(--bg-gradient-1), var(--bg-gradient-2));
-    background-size: 400% 400%;
-    animation: gradientFlow 18s ease infinite;
-    position: relative;
-    overflow-x: hidden;
-}
-
-.stApp::before {
-    content: '';
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: radial-gradient(circle at 20% 30%, rgba(159, 122, 234, 0.2) 0%, transparent 35%),
-                radial-gradient(circle at 80% 70%, rgba(246, 135, 179, 0.15) 0%, transparent 40%);
-    pointer-events: none;
-    z-index: 0;
-}
-
-@keyframes gradientFlow {
-    0% { background-position: 0% 50%; }
-    50% { background-position: 100% 50%; }
-    100% { background-position: 0% 50%; }
-}
-
-/* Base typography */
+/* Base Styles */
 html, body, [class*="css"] {
     font-family: 'Inter', sans-serif;
     scroll-behavior: smooth;
 }
 
-/* Premium glass card */
+/* Animated gradient background (light mode) */
+.stApp {
+    background: linear-gradient(-45deg, #f0f9ff, #e6f0fa, #d9e9f5, #e6f0fa);
+    background-size: 400% 400%;
+    animation: gradientBG 15s ease infinite;
+}
+
+@keyframes gradientBG {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
+/* Dark mode background override */
+@media (prefers-color-scheme: dark) {
+    .stApp {
+        background: linear-gradient(-45deg, #0b1a2e, #102a3c, #1a3f54, #102a3c);
+        background-size: 400% 400%;
+        animation: gradientBG 15s ease infinite;
+    }
+}
+
+/* Glassmorphism Card */
 .glass-card {
-    background: var(--card-bg);
-    backdrop-filter: blur(var(--glass-blur));
-    -webkit-backdrop-filter: blur(var(--glass-blur));
-    border-radius: 40px;
-    border: 1px solid var(--card-border);
-    padding: 2.5rem;
+    backdrop-filter: blur(10px);
+    background: rgba(255, 255, 255, 0.25);
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    padding: 2rem;
     margin-bottom: 2rem;
-    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5),
-                inset 0 1px 2px rgba(255, 255, 255, 0.1);
-    transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275),
-                box-shadow 0.4s ease,
-                border-color 0.3s ease;
-    position: relative;
-    z-index: 1;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
 }
 
 .glass-card:hover {
-    transform: translateY(-8px) scale(1.01);
-    box-shadow: 0 35px 70px -15px rgba(159, 122, 234, 0.5),
-                inset 0 1px 3px rgba(255, 255, 255, 0.2);
-    border-color: rgba(159, 122, 234, 0.4);
+    transform: translateY(-5px);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
 }
 
-.glass-card::after {
-    content: '';
-    position: absolute;
-    top: -1px;
-    left: -1px;
-    right: -1px;
-    bottom: -1px;
-    background: linear-gradient(135deg, rgba(159,122,234,0.3), rgba(246,135,179,0.3));
-    border-radius: 41px;
-    opacity: 0;
-    transition: opacity 0.4s ease;
-    pointer-events: none;
-    z-index: -1;
+@media (prefers-color-scheme: dark) {
+    .glass-card {
+        background: rgba(20, 40, 60, 0.6);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }
 }
 
-.glass-card:hover::after {
-    opacity: 0.2;
-}
-
-/* Header card – extra luxurious */
+/* Header Card */
 .header-card {
     text-align: center;
-    padding: 3rem 2rem;
-    background: rgba(10, 20, 40, 0.5);
-    backdrop-filter: blur(25px);
-    border-radius: 60px;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    box-shadow: 0 30px 60px -15px rgba(0, 0, 0, 0.6),
-                inset 0 0 30px rgba(159, 122, 234, 0.3);
-    margin-bottom: 2.5rem;
+    padding: 2.5rem 2rem;
+    background: rgba(255, 255, 255, 0.3);
+    backdrop-filter: blur(12px);
+    border-radius: 30px;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+    margin-bottom: 2rem;
     position: relative;
     overflow: hidden;
 }
@@ -130,9 +90,8 @@ html, body, [class*="css"] {
     left: -50%;
     width: 200%;
     height: 200%;
-    background: radial-gradient(circle, rgba(159, 122, 234, 0.2) 0%, transparent 60%);
-    animation: rotate 30s linear infinite;
-    z-index: -1;
+    background: radial-gradient(circle, rgba(37, 99, 235, 0.1) 0%, transparent 70%);
+    animation: rotate 20s linear infinite;
 }
 
 @keyframes rotate {
@@ -141,17 +100,13 @@ html, body, [class*="css"] {
 }
 
 .main-title {
-    font-family: 'Playfair Display', serif;
-    font-weight: 900;
-    font-size: 4rem;
-    background: linear-gradient(135deg, #f6e05e, #fbbf24, #f59e0b, #9f7aea);
+    font-weight: 800;
+    font-size: 3rem;
+    background: linear-gradient(135deg, #2563eb, #0ea5e9, #7c3aed);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
-    text-shadow: 0 0 30px rgba(246, 135, 179, 0.5);
-    animation: shimmer 5s infinite;
+    animation: shimmer 3s infinite;
     background-size: 200% auto;
-    margin-bottom: 0.5rem;
-    line-height: 1.2;
 }
 
 @keyframes shimmer {
@@ -161,206 +116,160 @@ html, body, [class*="css"] {
 }
 
 .subtitle {
-    font-size: 1.5rem;
-    font-weight: 600;
-    background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    opacity: 0.9;
-    letter-spacing: 2px;
-    margin-bottom: 1rem;
-}
-
-.sanskrit {
-    font-style: italic;
     font-size: 1.2rem;
-    color: var(--text-muted);
-    border-top: 1px solid rgba(255,255,255,0.1);
-    padding-top: 1rem;
-    display: inline-block;
+    font-weight: 600;
+    color: #1e293b;
+    opacity: 0.8;
+    letter-spacing: 1px;
 }
 
-/* Premium metric cards */
+@media (prefers-color-scheme: dark) {
+    .subtitle {
+        color: #e2e8f0;
+    }
+}
+
+/* Metric Cards */
 [data-testid="stMetric"] {
-    background: rgba(20, 30, 50, 0.4);
-    backdrop-filter: blur(15px);
-    border-radius: 35px;
-    padding: 1.8rem 1rem;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    box-shadow: 0 15px 35px -10px rgba(0, 0, 0, 0.5),
-                inset 0 1px 1px rgba(255, 255, 255, 0.1);
-    transition: all 0.4s ease;
+    background: rgba(255, 255, 255, 0.25);
+    backdrop-filter: blur(8px);
+    border-radius: 20px;
+    padding: 1.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+    transition: all 0.3s ease;
 }
 
 [data-testid="stMetric"]:hover {
-    transform: scale(1.02) translateY(-5px);
-    border-color: rgba(159, 122, 234, 0.4);
-    box-shadow: 0 25px 45px -10px rgba(159, 122, 234, 0.4);
+    transform: scale(1.02);
+    background: rgba(255, 255, 255, 0.35);
+    border-color: rgba(37, 99, 235, 0.5);
 }
 
 [data-testid="stMetricLabel"] {
     font-weight: 600;
     font-size: 1rem;
     text-transform: uppercase;
-    letter-spacing: 1px;
-    color: #cbd5e1;
+    letter-spacing: 0.5px;
+    color: #1e293b;
 }
 
 [data-testid="stMetricValue"] {
     font-weight: 800;
-    font-size: 2.5rem;
-    color: #f7fafc;
-    text-shadow: 0 0 10px rgba(159, 122, 234, 0.5);
+    font-size: 2.2rem;
+    color: #0f172a;
 }
 
-/* Buttons – with shine effect */
+@media (prefers-color-scheme: dark) {
+    [data-testid="stMetricLabel"] {
+        color: #cbd5e1;
+    }
+    [data-testid="stMetricValue"] {
+        color: #f1f5f9;
+    }
+}
+
+/* Buttons */
 .stButton > button {
-    background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+    background: linear-gradient(135deg, #2563eb, #0ea5e9, #7c3aed);
+    background-size: 200% auto;
     color: white;
     border: none;
-    border-radius: 60px;
-    padding: 1rem 2.5rem;
+    border-radius: 40px;
+    padding: 0.75rem 2rem;
     font-weight: 700;
-    font-size: 1.2rem;
-    letter-spacing: 1.5px;
-    text-transform: uppercase;
-    box-shadow: 0 10px 30px -5px rgba(159, 122, 234, 0.5);
+    font-size: 1rem;
+    letter-spacing: 0.5px;
+    box-shadow: 0 4px 15px rgba(37, 99, 235, 0.3);
     transition: all 0.4s ease;
-    position: relative;
-    overflow: hidden;
-    width: 100%;
     border: 1px solid rgba(255, 255, 255, 0.2);
-}
-
-.stButton > button::after {
-    content: '';
-    position: absolute;
-    top: -50%;
-    left: -60%;
-    width: 200%;
-    height: 200%;
-    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
-    transform: rotate(30deg);
-    transition: left 0.5s ease;
-}
-
-.stButton > button:hover::after {
-    left: 100%;
+    backdrop-filter: blur(4px);
+    width: 100%;
 }
 
 .stButton > button:hover {
-    transform: translateY(-5px) scale(1.02);
-    box-shadow: 0 20px 40px -5px rgba(159, 122, 234, 0.7);
-    background: linear-gradient(135deg, var(--accent-secondary), var(--accent-primary));
+    transform: translateY(-3px) scale(1.02);
+    box-shadow: 0 8px 25px rgba(37, 99, 235, 0.5);
+    background-position: right center;
+}
+
+.stButton > button:active {
+    transform: translateY(-1px);
 }
 
 /* File uploader */
 [data-testid="stFileUploader"] {
-    background: rgba(20, 30, 50, 0.4) !important;
-    backdrop-filter: blur(15px);
-    border-radius: 35px !important;
-    border: 2px dashed rgba(159, 122, 234, 0.5) !important;
-    padding: 2.5rem !important;
+    background: rgba(255, 255, 255, 0.2);
+    backdrop-filter: blur(8px);
+    border-radius: 20px;
+    padding: 1.5rem;
+    border: 2px dashed rgba(37, 99, 235, 0.5);
     transition: all 0.3s ease;
 }
 
 [data-testid="stFileUploader"]:hover {
-    border-color: var(--accent-secondary) !important;
-    background: rgba(20, 30, 50, 0.6) !important;
-    box-shadow: 0 0 30px rgba(159, 122, 234, 0.3);
+    border-color: #2563eb;
+    background: rgba(255, 255, 255, 0.3);
 }
 
 /* Dataframe */
 [data-testid="stDataFrame"] {
-    background: rgba(20, 30, 50, 0.3);
-    backdrop-filter: blur(15px);
-    border-radius: 30px;
-    padding: 1.5rem;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    box-shadow: 0 15px 30px -10px rgba(0,0,0,0.3);
+    background: rgba(255, 255, 255, 0.2);
+    backdrop-filter: blur(8px);
+    border-radius: 20px;
+    padding: 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.3);
 }
 
-[data-testid="stDataFrame"] table {
-    border-collapse: separate;
-    border-spacing: 0 5px;
-}
-
-[data-testid="stDataFrame"] th {
-    background: linear-gradient(135deg, #4c1d95, #6b21a5) !important;
-    color: white !important;
-    font-weight: 700;
-    font-size: 1rem;
-    padding: 1rem !important;
-    border-radius: 20px 20px 0 0;
-}
-
-[data-testid="stDataFrame"] td {
-    background: rgba(255, 255, 255, 0.05);
-    color: #f7fafc;
-    padding: 0.8rem 1rem !important;
-    border-bottom: 1px solid rgba(255,255,255,0.1);
-}
-
-[data-testid="stDataFrame"] tr:hover td {
-    background: rgba(159, 122, 234, 0.1);
-}
-
-/* Plotly chart */
+/* Plotly chart background */
 .js-plotly-plot .plotly, .plotly {
     background: transparent !important;
 }
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
 }
 ::-webkit-scrollbar-track {
-    background: rgba(0,0,0,0.2);
+    background: rgba(0,0,0,0.05);
     border-radius: 10px;
 }
 ::-webkit-scrollbar-thumb {
-    background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+    background: linear-gradient(135deg, #2563eb, #0ea5e9);
     border-radius: 10px;
 }
 ::-webkit-scrollbar-thumb:hover {
-    background: var(--accent-secondary);
+    background: #2563eb;
 }
 
 /* Footer */
 .footer {
     text-align: center;
     margin-top: 3rem;
-    font-size: 1rem;
-    color: var(--text-muted);
-    padding: 1.5rem;
-    border-top: 1px solid rgba(255,255,255,0.1);
-    background: rgba(10, 15, 30, 0.3);
-    backdrop-filter: blur(10px);
-    border-radius: 60px;
+    font-size: 0.9rem;
+    opacity: 0.7;
+    color: #1e293b;
+    padding: 1rem;
+    border-top: 1px solid rgba(0,0,0,0.1);
 }
 
-.footer span {
-    background: linear-gradient(135deg, #9f7aea, #f687b3);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    font-weight: 700;
+@media (prefers-color-scheme: dark) {
+    .footer {
+        color: #cbd5e1;
+    }
 }
-
-/* Hide default Streamlit footer */
-footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- WRAP MAIN CONTENT IN GLASS CARD ----------------
-st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-
-# ---------------- HEADER (with enhanced glass effect) ----------------
+# ---------------- HEADER (with glass effect) ----------------
 st.markdown("""
 <div class="header-card">
     <div class="main-title">PF CHALLAN AI COMMAND CENTER</div>
     <div class="subtitle">Enterprise Statutory Audit Suite</div>
-    <div class="sanskrit">🌸 कर्मण्येवाधिकारस्ते मा फलेषु कदाचन 🌸</div>
+    <div style="margin-top:1rem; font-style:italic; opacity:0.7;">
+        🌸 कर्मण्येवाधिकारस्ते मा फलेषु कदाचन 🌸
+    </div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -496,9 +405,8 @@ if files and run:
             fig.update_layout(
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#f7fafc", family="Inter"),
-                hovermode="x",
-                title_font=dict(size=20, color="#f7fafc")
+                font=dict(color="#1e293b" if st.get_option("theme.base")=="light" else "#f1f5f9"),
+                hovermode="x"
             )
             fig.update_traces(marker_line_width=0)
             st.plotly_chart(fig, use_container_width=True)
@@ -535,12 +443,9 @@ if files and run:
                 height=400
             )
 
-# Close the main glass card
-st.markdown('</div>', unsafe_allow_html=True)
-
 # ---------------- FOOTER ----------------
 st.markdown("""
 <div class="footer">
-    © 2026 | <span>Developed by Abhishek Jakkula</span> | ⚡ AI-Powered Statutory Audit
+    © 2026 | Developed by Abhishek Jakkula | <span style="color: #2563eb;">⚡ AI-Powered Statutory Audit</span>
 </div>
 """, unsafe_allow_html=True)
