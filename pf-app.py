@@ -290,27 +290,26 @@ def extract_last_number_from_line(line):
         return parse_currency(numbers[-1])
     return 0.0
 
-def calculate_due_date(wage_month_str):
+def calculate_due_date(month_name, year):
     """Calculate due date: 15th of next month."""
     try:
-        parts = wage_month_str.split()
-        month_dt = datetime.strptime(parts[0], "%B")
-        year = int(parts[1])
-        next_m = month_dt.month % 12 + 1
-        next_y = year + (1 if month_dt.month == 12 else 0)
-        return datetime(next_y, next_m, 15)
+        month_num = datetime.strptime(month_name.strip(), "%B").month
+        year_num = int(year)
+        next_month = month_num + 1 if month_num < 12 else 1
+        next_year = year_num + 1 if month_num == 12 else year_num
+        return datetime(next_year, next_month, 15)
     except:
         return None
 
 def parse_generated_date(date_str):
-    """Parse date like '06- MAY- 2025' to datetime."""
+    """Parse date like '06- MAY- 2025 18:01' to datetime."""
     if not date_str or date_str == "0":
         return None
     try:
         # Clean up the date string
         cleaned = re.sub(r'\s+', ' ', date_str.strip())
-        # Handle "06- MAY- 2025" format
-        match = re.match(r'(\d{1,2})-\s*([A-Za-z]+)\s*-\s*(\d{4})', cleaned)
+        # Handle "06- MAY- 2025 18:01" or "06-MAY-2025" format
+        match = re.search(r'(\d{1,2})\s*-\s*([A-Za-z]+)\s*-\s*(\d{4})', cleaned)
         if match:
             day, month, year = match.groups()
             dt_str = f"{day}-{month[:3]}-{year}"
@@ -320,66 +319,69 @@ def parse_generated_date(date_str):
     return None
 
 def sanitize_for_latin1(text):
-    """
-    Replace or remove characters not supported by Latin-1 encoding.
-    This prevents UnicodeEncodeError when generating PDF with FPDF.
-    """
+    """Replace or remove characters not supported by Latin-1 encoding."""
     if not isinstance(text, str):
         text = str(text)
-    # Replace common problematic characters
     replacements = {
-        '₹': 'Rs.',         # Rupee symbol
-        '“': '"', '”': '"', # Curly double quotes
-        '‘': "'", '’': "'", # Curly single quotes
-        '–': '-', '—': '-', # En/Em dash
-        '…': '...',         # Ellipsis
-        '\u00a0': ' ',      # Non-breaking space
-        '\u2022': '*',      # Bullet
-        '°': ' deg',        # Degree symbol
-        '©': '(c)',         # Copyright
-        '®': '(R)',         # Registered
-        '™': '(TM)',        # Trademark
+        '₹': 'Rs.',
+        '“': '"', '”': '"',
+        '‘': "'", '’': "'",
+        '–': '-', '—': '-',
+        '…': '...',
+        '\u00a0': ' ',
+        '\u2022': '*',
+        '°': ' deg',
+        '©': '(c)',
+        '®': '(R)',
+        '™': '(TM)',
+        '&amp;': '&',
+        '&#x27;': "'",
+        '&quot;': '"',
     }
     for old, new in replacements.items():
         text = text.replace(old, new)
-    # Remove any remaining non-Latin-1 characters (ordinal > 255)
     return ''.join(c if ord(c) < 256 else '?' for c in text)
 
 def extract_challan_data(text):
-    """Extract PF challan data from PDF text."""
+    """Extract PF challan data from PDF text. Returns list of records."""
     records = []
+    # Normalize text: replace HTML entities
+    text = text.replace('&amp;', '&').replace('&#x27;', "'").replace('&quot;', '"')
     lines = text.split('\n')
+    
     i = 0
     while i < len(lines):
         line = lines[i].strip()
-        # Look for wage month line
+        # Look for "Dues for the wage month" line
         if re.search(r'Dues for the wage month', line, re.I):
-            # Extract wage month
+            # Extract month and year
             month_match = re.search(r'wage month\s+([A-Za-z]+)\s+(\d{4})', line, re.I)
             if not month_match and i+1 < len(lines):
-                month_match = re.search(r'wage month\s+([A-Za-z]+)\s+(\d{4})', line + " " + lines[i+1], re.I)
+                combined = line + " " + lines[i+1]
+                month_match = re.search(r'wage month\s+([A-Za-z]+)\s+(\d{4})', combined, re.I)
             
             if month_match:
                 month_name = month_match.group(1).strip()
                 year = month_match.group(2).strip()
                 wage_month = f"{month_name.title()} {year}"
                 
-                # Look for generated date within next few lines
+                # Extract generated date from the block
                 gen_date_str = "0"
-                for j in range(i, min(i+20, len(lines))):
-                    if 'system generated challan on' in lines[j].lower():
+                for j in range(i, min(i+30, len(lines))):
+                    if 'system generated' in lines[j].lower():
+                        # Look for pattern like "06- MAY- 2025 18:01"
                         date_match = re.search(r'(\d{2})\s*-\s*([A-Za-z]+)\s*-\s*(\d{4})', lines[j])
                         if date_match:
                             gen_date_str = f"{date_match.group(1)}-{date_match.group(2)[:3]}-{date_match.group(3)}"
                         break
                 
-                # Find the table rows
+                # Initialize totals
                 admin_total = 0.0
                 employer_total = 0.0
                 employee_total = 0.0
                 
-                # Search for table rows
-                for k in range(i, min(i+30, len(lines))):
+                # Search for the three rows within ~30 lines after the wage month
+                for k in range(i, min(i+40, len(lines))):
                     line_lower = lines[k].lower()
                     if 'administration charges' in line_lower:
                         admin_total = extract_last_number_from_line(lines[k])
@@ -388,39 +390,34 @@ def extract_challan_data(text):
                     elif "employee's share" in line_lower or "employee share" in line_lower:
                         employee_total = extract_last_number_from_line(lines[k])
                 
-                # If totals are zero, try alternative extraction from block
+                # Fallback using regex on a block if still zero
                 if admin_total == 0 and employer_total == 0 and employee_total == 0:
-                    block = '\n'.join(lines[max(0,i-2):min(len(lines), i+40)])
-                    # Row 1: Administration Charges
+                    block = '\n'.join(lines[max(0,i):min(len(lines), i+50)])
+                    # Look for rows: 1 Administration Charges ... TOTAL value
                     admin_match = re.search(r'1\s+Administration Charges[\s\d,]+(\d[\d,]*)', block, re.I)
                     if admin_match:
                         admin_total = parse_currency(admin_match.group(1))
-                    # Row 2: Employer's Share
                     emp_match = re.search(r'2\s+Employer[\s\S]+?(\d[\d,]*)(?=\s*\n|\s*3)', block, re.I)
                     if emp_match:
                         employer_total = parse_currency(emp_match.group(1))
-                    # Row 3: Employee's Share
                     employee_match = re.search(r'3\s+Employee[\s\S]+?(\d[\d,]*)(?=\s*\n|\s*$)', block, re.I)
                     if employee_match:
                         employee_total = parse_currency(employee_match.group(1))
                 
-                # Calculate grand total
+                # Grand total (can also be taken from "Total remittance by Employer" line)
                 grand_total = admin_total + employer_total + employee_total
                 if grand_total == 0:
                     total_match = re.search(r'Total remittance by Employer\s*\(Rs\.\)\s*([\d,]+)', text, re.I)
                     if total_match:
                         grand_total = parse_currency(total_match.group(1))
                 
-                # Calculate due date
-                due_dt = calculate_due_date(wage_month)
+                # Compute due date and late days
+                due_dt = calculate_due_date(month_name, year)
                 gen_dt = parse_generated_date(gen_date_str)
-                
-                # Calculate late days (positive = late, negative = early)
                 late_days = 0
                 if due_dt and gen_dt:
                     late_days = (gen_dt - due_dt).days
                 
-                # Disallowance = Employee Share only if late
                 emp_disallowance = employee_total if late_days > 0 else 0.0
                 
                 records.append({
@@ -495,7 +492,6 @@ def generate_pdf_summary(df, total_pf, emp_dis):
         status = "LATE" if row['Late Days'] > 0 else "ON TIME"
         pdf.cell(w[9], 8, sanitize_for_latin1(status), 1, 1, 'C')
     
-    # Return the PDF as bytes with safe encoding
     return pdf.output(dest='S').encode('latin-1', 'replace')
 
 # ---------------- MAIN APP ----------------
@@ -510,13 +506,13 @@ if files and run:
         all_records = []
         for uploaded_file in files:
             with pdfplumber.open(uploaded_file) as pdf:
-                full_text = ""
-                for page in pdf.pages:
-                    text = page.extract_text()
-                    if text:
-                        full_text += text + "\n"
-                records = extract_challan_data(full_text)
-                all_records.extend(records)
+                full_text = "\n".join([p.extract_text() or "" for p in pdf.pages])
+                # Only process if text contains "Dues for the wage month"
+                if re.search(r'Dues for the wage month', full_text, re.I):
+                    records = extract_challan_data(full_text)
+                    all_records.extend(records)
+                else:
+                    st.info(f"Skipping file without challan data: {uploaded_file.name}")
         
         if all_records:
             df = pd.DataFrame(all_records)
@@ -594,7 +590,7 @@ if files and run:
             else:
                 st.success("✅ All challans filed on or before due date. No disallowance applicable.")
         else:
-            st.error("❌ No valid PF challan data could be extracted. Please check the PDF format.")
+            st.error("❌ No valid PF challan data could be extracted from the uploaded PDFs. Please ensure you have uploaded the correct challan files.")
 else:
     if files and not run:
         st.info("👆 Click 'INITIATE SYSTEM AUDIT' to start analysis.")
@@ -604,6 +600,6 @@ else:
 # ---------------- FOOTER ----------------
 st.markdown("""
 <div class="footer">
-    © 2026 | Developed by Abhishek Jakkula | ⚡ AI-Powered Statutory Audit | Version 2.0
+    © 2026 | Developed by Abhishek Jakkula | ⚡ AI-Powered Statutory Audit | Version 3.0
 </div>
 """, unsafe_allow_html=True)
