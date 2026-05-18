@@ -12,7 +12,7 @@ import calendar
 # ---------------- PAGE CONFIG ----------------
 st.set_page_config(page_title="PF AI Command Center", layout="wide", page_icon="📊")
 
-# ---------------- ULTRA STYLISH UI ----------------
+# ---------------- ULTRA STYLISH UI (GLASSMORPHISM + ANIMATIONS) ----------------
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');
@@ -23,7 +23,7 @@ html, body, [class*="css"] {
     scroll-behavior: smooth;
 }
 
-/* Animated gradient background */
+/* Animated gradient background (light mode) */
 .stApp {
     background: linear-gradient(-45deg, #f0f9ff, #e6f0fa, #d9e9f5, #e6f0fa);
     background-size: 400% 400%;
@@ -36,7 +36,7 @@ html, body, [class*="css"] {
     100% { background-position: 0% 50%; }
 }
 
-/* Dark mode override */
+/* Dark mode background override */
 @media (prefers-color-scheme: dark) {
     .stApp {
         background: linear-gradient(-45deg, #0b1a2e, #102a3c, #1a3f54, #102a3c);
@@ -45,7 +45,7 @@ html, body, [class*="css"] {
     }
 }
 
-/* Glass Card */
+/* Glassmorphism Card */
 .glass-card {
     backdrop-filter: blur(10px);
     background: rgba(255, 255, 255, 0.25);
@@ -129,7 +129,7 @@ html, body, [class*="css"] {
     }
 }
 
-/* Metrics */
+/* Metric Cards */
 [data-testid="stMetric"] {
     background: rgba(255, 255, 255, 0.25);
     backdrop-filter: blur(8px);
@@ -146,6 +146,29 @@ html, body, [class*="css"] {
     border-color: rgba(37, 99, 235, 0.5);
 }
 
+[data-testid="stMetricLabel"] {
+    font-weight: 600;
+    font-size: 1rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #1e293b;
+}
+
+[data-testid="stMetricValue"] {
+    font-weight: 800;
+    font-size: 2.2rem;
+    color: #0f172a;
+}
+
+@media (prefers-color-scheme: dark) {
+    [data-testid="stMetricLabel"] {
+        color: #cbd5e1;
+    }
+    [data-testid="stMetricValue"] {
+        color: #f1f5f9;
+    }
+}
+
 /* Buttons */
 .stButton > button {
     background: linear-gradient(135deg, #2563eb, #0ea5e9, #7c3aed);
@@ -156,8 +179,11 @@ html, body, [class*="css"] {
     padding: 0.75rem 2rem;
     font-weight: 700;
     font-size: 1rem;
+    letter-spacing: 0.5px;
     box-shadow: 0 4px 15px rgba(37, 99, 235, 0.3);
     transition: all 0.4s ease;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    backdrop-filter: blur(4px);
     width: 100%;
 }
 
@@ -167,6 +193,10 @@ html, body, [class*="css"] {
     background-position: right center;
 }
 
+.stButton > button:active {
+    transform: translateY(-1px);
+}
+
 /* File uploader */
 [data-testid="stFileUploader"] {
     background: rgba(255, 255, 255, 0.2);
@@ -174,11 +204,43 @@ html, body, [class*="css"] {
     border-radius: 20px;
     padding: 1.5rem;
     border: 2px dashed rgba(37, 99, 235, 0.5);
+    transition: all 0.3s ease;
 }
 
 [data-testid="stFileUploader"]:hover {
     border-color: #2563eb;
     background: rgba(255, 255, 255, 0.3);
+}
+
+/* Dataframe */
+[data-testid="stDataFrame"] {
+    background: rgba(255, 255, 255, 0.2);
+    backdrop-filter: blur(8px);
+    border-radius: 20px;
+    padding: 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+/* Plotly chart background */
+.js-plotly-plot .plotly, .plotly {
+    background: transparent !important;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+::-webkit-scrollbar-track {
+    background: rgba(0,0,0,0.05);
+    border-radius: 10px;
+}
+::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #2563eb, #0ea5e9);
+    border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #2563eb;
 }
 
 /* Footer */
@@ -200,7 +262,7 @@ html, body, [class*="css"] {
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- HEADER ----------------
+# ---------------- HEADER (with glass effect) ----------------
 st.markdown("""
 <div class="header-card">
     <div class="main-title">PF CHALLAN AI COMMAND CENTER</div>
@@ -213,7 +275,7 @@ st.markdown("""
 
 # ---------------- HELPER FUNCTIONS ----------------
 def parse_currency(value_str):
-    """Convert currency string like '1,461' or '36,520' to float"""
+    """Convert currency string like '1,461' or '36,520' to float."""
     if not value_str:
         return 0.0
     try:
@@ -222,25 +284,26 @@ def parse_currency(value_str):
         return 0.0
 
 def extract_last_number_from_line(line):
-    """Extract the last numeric value (including commas) from a line"""
+    """Extract the last numeric value (including commas) from a line."""
     numbers = re.findall(r'[\d,]+(?:\.\d+)?', line)
     if numbers:
         return parse_currency(numbers[-1])
     return 0.0
 
-def calculate_due_date(month_name, year):
-    """Calculate due date: 15th of next month"""
+def calculate_due_date(wage_month_str):
+    """Calculate due date: 15th of next month."""
     try:
-        month_num = datetime.strptime(month_name.strip(), "%B").month
-        year_num = int(year)
-        next_month = month_num + 1 if month_num < 12 else 1
-        next_year = year_num + 1 if month_num == 12 else year_num
-        return datetime(next_year, next_month, 15)
+        parts = wage_month_str.split()
+        month_dt = datetime.strptime(parts[0], "%B")
+        year = int(parts[1])
+        next_m = month_dt.month % 12 + 1
+        next_y = year + (1 if month_dt.month == 12 else 0)
+        return datetime(next_y, next_m, 15)
     except:
         return None
 
 def parse_generated_date(date_str):
-    """Parse date like '06- MAY- 2025' to datetime"""
+    """Parse date like '06- MAY- 2025' to datetime."""
     if not date_str or date_str == "0":
         return None
     try:
@@ -256,14 +319,36 @@ def parse_generated_date(date_str):
         pass
     return None
 
+def sanitize_for_latin1(text):
+    """
+    Replace or remove characters not supported by Latin-1 encoding.
+    This prevents UnicodeEncodeError when generating PDF with FPDF.
+    """
+    if not isinstance(text, str):
+        text = str(text)
+    # Replace common problematic characters
+    replacements = {
+        '₹': 'Rs.',         # Rupee symbol
+        '“': '"', '”': '"', # Curly double quotes
+        '‘': "'", '’': "'", # Curly single quotes
+        '–': '-', '—': '-', # En/Em dash
+        '…': '...',         # Ellipsis
+        '\u00a0': ' ',      # Non-breaking space
+        '\u2022': '*',      # Bullet
+        '°': ' deg',        # Degree symbol
+        '©': '(c)',         # Copyright
+        '®': '(R)',         # Registered
+        '™': '(TM)',        # Trademark
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    # Remove any remaining non-Latin-1 characters (ordinal > 255)
+    return ''.join(c if ord(c) < 256 else '?' for c in text)
+
 def extract_challan_data(text):
-    """Extract PF challan data from PDF text"""
+    """Extract PF challan data from PDF text."""
     records = []
-    
-    # Find all wage month sections (each challan starts with "Dues for the wage month")
-    # Split by lines first for easier processing
     lines = text.split('\n')
-    
     i = 0
     while i < len(lines):
         line = lines[i].strip()
@@ -271,7 +356,7 @@ def extract_challan_data(text):
         if re.search(r'Dues for the wage month', line, re.I):
             # Extract wage month
             month_match = re.search(r'wage month\s+([A-Za-z]+)\s+(\d{4})', line, re.I)
-            if not month_match:
+            if not month_match and i+1 < len(lines):
                 month_match = re.search(r'wage month\s+([A-Za-z]+)\s+(\d{4})', line + " " + lines[i+1], re.I)
             
             if month_match:
@@ -288,7 +373,7 @@ def extract_challan_data(text):
                             gen_date_str = f"{date_match.group(1)}-{date_match.group(2)[:3]}-{date_match.group(3)}"
                         break
                 
-                # Find the table with SL.PARTICULARS
+                # Find the table rows
                 admin_total = 0.0
                 employer_total = 0.0
                 employee_total = 0.0
@@ -303,9 +388,8 @@ def extract_challan_data(text):
                     elif "employee's share" in line_lower or "employee share" in line_lower:
                         employee_total = extract_last_number_from_line(lines[k])
                 
-                # If totals are zero, try alternative extraction from full text block
+                # If totals are zero, try alternative extraction from block
                 if admin_total == 0 and employer_total == 0 and employee_total == 0:
-                    # Look for the structured table using regex on surrounding context
                     block = '\n'.join(lines[max(0,i-2):min(len(lines), i+40)])
                     # Row 1: Administration Charges
                     admin_match = re.search(r'1\s+Administration Charges[\s\d,]+(\d[\d,]*)', block, re.I)
@@ -320,7 +404,7 @@ def extract_challan_data(text):
                     if employee_match:
                         employee_total = parse_currency(employee_match.group(1))
                 
-                # Fallback: Look for "Total remittance by Employer" line
+                # Calculate grand total
                 grand_total = admin_total + employer_total + employee_total
                 if grand_total == 0:
                     total_match = re.search(r'Total remittance by Employer\s*\(Rs\.\)\s*([\d,]+)', text, re.I)
@@ -328,7 +412,7 @@ def extract_challan_data(text):
                         grand_total = parse_currency(total_match.group(1))
                 
                 # Calculate due date
-                due_dt = calculate_due_date(month_name, year)
+                due_dt = calculate_due_date(wage_month)
                 gen_dt = parse_generated_date(gen_date_str)
                 
                 # Calculate late days (positive = late, negative = early)
@@ -350,7 +434,6 @@ def extract_challan_data(text):
                     "Grand Total": grand_total,
                     "Employee Disallowance": emp_disallowance
                 })
-        
         i += 1
     
     return records
@@ -376,14 +459,15 @@ def generate_pdf_summary(df, total_pf, emp_dis):
     pdf = FPDF(orientation='L', unit='mm', format='A4')
     pdf.add_page()
     pdf.set_font("Arial", 'B', 16)
-    pdf.cell(0, 10, "STATUTORY PF COMPLIANCE AUDIT CERTIFICATE", ln=True, align='C')
+    pdf.cell(0, 10, sanitize_for_latin1("STATUTORY PF COMPLIANCE AUDIT CERTIFICATE"), ln=True, align='C')
     pdf.set_font("Arial", '', 10)
-    pdf.cell(0, 10, f"Generated For Audit Purpose | {datetime.now().strftime('%d-%m-%Y')}", ln=True, align='C')
+    date_str = datetime.now().strftime('%d-%m-%Y')
+    pdf.cell(0, 10, sanitize_for_latin1(f"Generated For Audit Purpose | {date_str}"), ln=True, align='C')
     pdf.ln(10)
     
     pdf.set_font("Arial", 'B', 11)
-    pdf.cell(0, 8, f"Total PF Paid: INR {total_pf:,.2f}", ln=True)
-    pdf.cell(0, 8, f"Total Employee Share Disallowance (late payments): INR {emp_dis:,.2f}", ln=True)
+    pdf.cell(0, 8, sanitize_for_latin1(f"Total PF Paid: INR {total_pf:,.2f}"), ln=True)
+    pdf.cell(0, 8, sanitize_for_latin1(f"Total Employee Share Disallowance (late payments): INR {emp_dis:,.2f}"), ln=True)
     pdf.ln(5)
     
     # Table headers
@@ -393,24 +477,25 @@ def generate_pdf_summary(df, total_pf, emp_dis):
     w = [35, 28, 28, 18, 28, 32, 32, 32, 35, 22]
     headers = ["Wage Month", "Due Date", "Paid/Gen Date", "Late Days", "Admin", "Employer", "Employee", "Total", "Disallowance", "Status"]
     for i in range(len(headers)):
-        pdf.cell(w[i], 10, headers[i], 1, 0, 'C', True)
+        pdf.cell(w[i], 10, sanitize_for_latin1(headers[i]), 1, 0, 'C', True)
     pdf.ln()
     
     pdf.set_font("Arial", '', 7)
     pdf.set_text_color(0, 0, 0)
     for _, row in df.iterrows():
-        pdf.cell(w[0], 8, str(row['Wage Month']), 1)
-        pdf.cell(w[1], 8, str(row['Due Date']), 1, 0, 'C')
-        pdf.cell(w[2], 8, str(row['Generated Date']), 1, 0, 'C')
+        pdf.cell(w[0], 8, sanitize_for_latin1(str(row['Wage Month'])), 1)
+        pdf.cell(w[1], 8, sanitize_for_latin1(str(row['Due Date'])), 1, 0, 'C')
+        pdf.cell(w[2], 8, sanitize_for_latin1(str(row['Generated Date'])), 1, 0, 'C')
         pdf.cell(w[3], 8, str(row['Late Days']), 1, 0, 'C')
         pdf.cell(w[4], 8, f"{row['Admin Charges']:,.2f}", 1, 0, 'R')
         pdf.cell(w[5], 8, f"{row['Employer Share']:,.2f}", 1, 0, 'R')
         pdf.cell(w[6], 8, f"{row['Employee Share']:,.2f}", 1, 0, 'R')
         pdf.cell(w[7], 8, f"{row['Grand Total']:,.2f}", 1, 0, 'R')
         pdf.cell(w[8], 8, f"{row['Employee Disallowance']:,.2f}", 1, 0, 'R')
-        status = "⚠️ LATE" if row['Late Days'] > 0 else "✅ ON TIME"
-        pdf.cell(w[9], 8, status, 1, 1, 'C')
+        status = "LATE" if row['Late Days'] > 0 else "ON TIME"
+        pdf.cell(w[9], 8, sanitize_for_latin1(status), 1, 1, 'C')
     
+    # Return the PDF as bytes with safe encoding
     return pdf.output(dest='S').encode('latin-1', 'replace')
 
 # ---------------- MAIN APP ----------------
@@ -430,17 +515,14 @@ if files and run:
                     text = page.extract_text()
                     if text:
                         full_text += text + "\n"
-                
-                # Extract data from this file
                 records = extract_challan_data(full_text)
                 all_records.extend(records)
         
         if all_records:
             df = pd.DataFrame(all_records)
             
-            # Sort by Wage Month (assuming chronological)
+            # Sort by Wage Month chronologically
             try:
-                # Add a sort key
                 month_order = {month: i for i, month in enumerate(calendar.month_name)}
                 df['SortKey'] = df['Wage Month'].apply(
                     lambda x: month_order.get(x.split()[0], 0) + int(x.split()[1]) * 12
@@ -458,7 +540,7 @@ if files and run:
             late_count = len(df[df['Late Days'] > 0])
             
             m1.metric("💰 TOTAL PF PAID", f"INR {total_pf:,.2f}")
-            m2.metric("⚠️ TAX DISALLOWANCE (SEC 36)", f"INR {emp_dis:,.2f}", 
+            m2.metric("⚠️ TAX DISALLOWANCE (SEC 36)", f"INR {emp_dis:,.2f}",
                       delta=f"{emp_dis/total_pf*100:.1f}%" if total_pf > 0 else None)
             m3.metric("⏰ LATE FILINGS", f"{late_count} / {len(df)}")
             
