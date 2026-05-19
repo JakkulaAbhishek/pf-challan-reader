@@ -654,7 +654,21 @@ class ExcelGenerator:
         return output.getvalue()
 
 class PDFGenerator:
-    """Generate PDF audit certificate"""
+    """Generate PDF audit certificate with Unicode sanitization"""
+    
+    @staticmethod
+    def _sanitize(text: str) -> str:
+        """Replace non-latin1 characters with ASCII equivalents"""
+        text = text.replace('₹', 'Rs.')
+        text = text.replace('⚠️', '!')
+        text = text.replace('✅', '[OK]')
+        text = text.replace('✓', '[OK]')
+        # Also replace any other problematic symbols
+        text = text.replace('\u20b9', 'Rs.')  # Rupee symbol again
+        text = text.replace('\u2713', '[OK]')  # Check mark
+        text = text.replace('\u2714', '[OK]')  # Heavy check mark
+        # Encode to latin-1, replace any remaining non-ASCII with '?', then decode back
+        return text.encode('latin-1', errors='replace').decode('latin-1')
     
     @staticmethod
     def generate(df: pd.DataFrame, total_pf: float, emp_dis: float) -> bytes:
@@ -663,56 +677,70 @@ class PDFGenerator:
         
         # Header
         pdf.set_font("Arial", 'B', 14)
-        pdf.cell(0, 10, "PF COMPLIANCE AUDIT CERTIFICATE", ln=True, align='C')
+        pdf.cell(0, 10, PDFGenerator._sanitize("PF COMPLIANCE AUDIT CERTIFICATE"), ln=True, align='C')
         pdf.set_font("Arial", '', 9)
-        pdf.cell(0, 6, f"Generated: {datetime.now().strftime('%d-%b-%Y %H:%M:%S')}", ln=True, align='C')
+        pdf.cell(0, 6, PDFGenerator._sanitize(f"Generated: {datetime.now().strftime('%d-%b-%Y %H:%M:%S')}"), ln=True, align='C')
         pdf.ln(5)
         
         # Summary
         pdf.set_fill_color(30, 58, 95)
         pdf.set_text_color(255, 255, 255)
         pdf.set_font("Arial", 'B', 9)
-        pdf.cell(90, 8, "Total PF Audited", 1, 0, 'C', True)
-        pdf.cell(90, 8, "Employee Disallowance", 1, 1, 'C', True)
+        pdf.cell(90, 8, PDFGenerator._sanitize("Total PF Audited"), 1, 0, 'C', True)
+        pdf.cell(90, 8, PDFGenerator._sanitize("Employee Disallowance"), 1, 1, 'C', True)
         
         pdf.set_text_color(0, 0, 0)
         pdf.set_font("Arial", 'B', 11)
-        pdf.cell(90, 10, f"₹{total_pf:,.2f}", 1, 0, 'C')
-        pdf.cell(90, 10, f"₹{emp_dis:,.2f}", 1, 1, 'C')
+        pdf.cell(90, 10, PDFGenerator._sanitize(f"Rs.{total_pf:,.2f}"), 1, 0, 'C')
+        pdf.cell(90, 10, PDFGenerator._sanitize(f"Rs.{emp_dis:,.2f}"), 1, 1, 'C')
         pdf.ln(5)
         
-        # Table
+        # Table headers
         pdf.set_font("Arial", 'B', 7)
         pdf.set_fill_color(30, 41, 59)
         pdf.set_text_color(255, 255, 255)
         
-        headers = ["Wage Month", "Due Date", "Generated", "Late", "Total", "Status"]
-        widths = [30, 25, 30, 15, 30, 20]
+        headers = ["Wage Month", "Due Date", "Generated", "Late Days", "Total (Rs.)", "Status"]
+        widths = [30, 25, 30, 20, 30, 25]
         
         for i, header in enumerate(headers):
-            pdf.cell(widths[i], 6, header, 1, 0, 'C', True)
+            pdf.cell(widths[i], 6, PDFGenerator._sanitize(header), 1, 0, 'C', True)
         pdf.ln()
         
         pdf.set_font("Arial", '', 6)
         pdf.set_text_color(0, 0, 0)
         
         for _, row in df.iterrows():
-            pdf.cell(widths[0], 5, str(row['Wage Month'])[:27], 1)
-            pdf.cell(widths[1], 5, str(row['Due Date']), 1, 0, 'C')
-            pdf.cell(widths[2], 5, str(row['Generated Date'])[:27], 1, 0, 'C')
-            pdf.cell(widths[3], 5, str(row['Late Days']), 1, 0, 'C')
-            pdf.cell(widths[4], 5, f"₹{row['Grand Total']:,.0f}", 1, 0, 'R')
+            # Sanitize each cell value
+            wage_month = PDFGenerator._sanitize(str(row['Wage Month'])[:27])
+            due_date = PDFGenerator._sanitize(str(row['Due Date']))
+            gen_date = PDFGenerator._sanitize(str(row['Generated Date'])[:27])
+            late_days = str(row['Late Days'])
+            total = PDFGenerator._sanitize(f"Rs.{row['Grand Total']:,.0f}")
+            status = PDFGenerator._sanitize(str(row['Status']))
+            # Remove the icon from status if present (e.g., "⚠️ LATE" -> "LATE")
+            status = re.sub(r'[!\[OK\]⚠️✅✓]', '', status).strip()
+            if not status:
+                status = "LATE" if row['Late Days'] > 0 else ("EARLY" if row['Late Days'] < 0 else "ON TIME")
             
-            status = str(row['Status'])
-            if 'LATE' in status:
+            pdf.cell(widths[0], 5, wage_month, 1)
+            pdf.cell(widths[1], 5, due_date, 1, 0, 'C')
+            pdf.cell(widths[2], 5, gen_date, 1, 0, 'C')
+            pdf.cell(widths[3], 5, late_days, 1, 0, 'C')
+            pdf.cell(widths[4], 5, total, 1, 0, 'R')
+            
+            # Color code status
+            if 'LATE' in status.upper():
                 pdf.set_text_color(185, 28, 28)
-            elif 'EARLY' in status:
+            elif 'EARLY' in status.upper():
                 pdf.set_text_color(46, 125, 50)
-            
-            pdf.cell(widths[5], 5, status.split()[-1], 1, 1, 'C')
+            else:
+                pdf.set_text_color(0, 0, 0)
+            pdf.cell(widths[5], 5, status, 1, 1, 'C')
             pdf.set_text_color(0, 0, 0)
         
-        return pdf.output(dest='S').encode('latin-1', 'replace')
+        # Return PDF as bytes
+        return pdf.output(dest='S')
 
 # ============================================================================
 # UI COMPONENTS
@@ -970,7 +998,7 @@ def render_dashboard(records: List[ChallanRecord]):
     with c1:
         excel_data = ExcelGenerator.generate(df)
         st.download_button(
-            " Download Excel",
+            "📊 Download Excel",
             excel_data,
             f"PF_Audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
             use_container_width=True
