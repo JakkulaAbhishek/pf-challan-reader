@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PF CHALLAN AI COMMAND CENTER v5.1
+PF CHALLAN AI COMMAND CENTER v5.2
+- Enhanced UI: export section at top, Excel button prominent
 - Guaranteed wage month extraction (multiple patterns)
 - Table + regex financial parsing
 - Full dashboard & exports
-- Fixed NameError: warnings imported
 """
 
 import streamlit as st
@@ -26,7 +26,7 @@ from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum
 import hashlib
-import warnings  # ✅ FIX: required for filterwarnings
+import warnings
 
 # Optional OCR
 try:
@@ -147,7 +147,6 @@ def parse_indian_number(value) -> float:
         return 0.0
 
 def calculate_due_date(wage_month: str) -> Optional[datetime]:
-    """Calculate 15th of next month"""
     try:
         parts = wage_month.strip().split()
         if len(parts) < 2:
@@ -184,7 +183,7 @@ def generate_hash(text: str) -> str:
     return hashlib.md5(text.encode('utf-8')).hexdigest()[:8]
 
 # ============================================================================
-# PDF TEXT EXTRACTION (Multi-engine)
+# PDF TEXT EXTRACTION
 # ============================================================================
 def extract_text(file) -> str:
     try:
@@ -245,7 +244,7 @@ def extract_trrn(text: str) -> str:
     return match.group(1) if match else ""
 
 # ============================================================================
-# EXTRACT WAGE MONTH - ULTIMATE PATTERNS (MOST IMPORTANT)
+# EXTRACT WAGE MONTH - ULTIMATE PATTERNS
 # ============================================================================
 def extract_wage_month(text: str) -> str:
     patterns = [
@@ -255,28 +254,24 @@ def extract_wage_month(text: str) -> str:
         r'PROVISIONAL CHALLAN FOR WAGE MONTH\s*[:]\s*([A-Za-z]+\s+\d{4})',
         r'Month\s*[:]\s*([A-Za-z]+\s+\d{4})',
         r'for the month of\s+([A-Za-z]+\s+\d{4})',
-        r'([A-Za-z]+\s+\d{4})\s+ECR',  # sometimes before ECR
-        r'([A-Za-z]+-\d{4})',          # e.g. "May-2024"
-        r'([A-Za-z]+/\d{4})'           # e.g. "May/2024"
+        r'([A-Za-z]+\s+\d{4})\s+ECR',
+        r'([A-Za-z]+-\d{4})',
+        r'([A-Za-z]+/\d{4})'
     ]
     for pattern in patterns:
         match = re.search(pattern, text, re.I)
         if match:
             raw = match.group(1).strip()
-            # Convert hyphen or slash to space
             raw = raw.replace('-', ' ').replace('/', ' ')
             parts = raw.split()
             if len(parts) >= 2:
-                # Ensure proper case and 4-digit year
                 month = parts[0].title()
                 year = parts[1].strip()
                 if len(year) == 4 and year.isdigit():
                     return f"{month} {year}"
                 elif len(year) == 2 and year.isdigit():
-                    # assume 20xx
                     return f"{month} 20{year}"
             return raw
-    # Fallback: look for any month+year near "wage" or "month"
     month_year_pattern = r'\b(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}\b'
     matches = re.findall(month_year_pattern, text, re.I)
     if matches:
@@ -319,7 +314,7 @@ def extract_subscribers_wages(text: str) -> Tuple[int, float]:
     return subscribers, wages
 
 # ============================================================================
-# PARSE FINANCIAL TABLE - USING PDFPLUMBER TABLES + REGEX FALLBACK
+# PARSE FINANCIAL TABLE + REGEX FALLBACK
 # ============================================================================
 def parse_financial_table(file) -> FinancialData:
     data = FinancialData()
@@ -330,7 +325,6 @@ def parse_financial_table(file) -> FinancialData:
                 for table in tables:
                     if not table:
                         continue
-                    # Look for header row containing "PARTICULARS" or "A/C"
                     header_row = None
                     for row in table:
                         if row and any(cell and ('PARTICULARS' in str(cell).upper() or 'A/C' in str(cell).upper()) for cell in row):
@@ -338,7 +332,6 @@ def parse_financial_table(file) -> FinancialData:
                             break
                     if not header_row:
                         continue
-                    # Find indices of account columns
                     ac_indices = {}
                     for idx, cell in enumerate(header_row):
                         if cell:
@@ -353,7 +346,6 @@ def parse_financial_table(file) -> FinancialData:
                                 ac_indices['21'] = idx
                             elif 'A/C.22' in cell_str or 'A/C 22' in cell_str:
                                 ac_indices['22'] = idx
-                    # Iterate data rows
                     for row in table:
                         if not row or row == header_row:
                             continue
@@ -363,14 +355,12 @@ def parse_financial_table(file) -> FinancialData:
                             if nums:
                                 data.admin_charges = nums[-1]
                         elif "EMPLOYER'S SHARE" in row_text or 'EMPLOYER SHARE' in row_text:
-                            # Use indices if available
                             if '01' in ac_indices and ac_indices['01'] < len(row):
                                 data.employer_share = parse_indian_number(row[ac_indices['01']])
                             if '10' in ac_indices and ac_indices['10'] < len(row):
                                 data.pension_share = parse_indian_number(row[ac_indices['10']])
                             if '21' in ac_indices and ac_indices['21'] < len(row):
                                 data.edli_share = parse_indian_number(row[ac_indices['21']])
-                            # If no indices, take numbers sequentially
                             if not ac_indices:
                                 nums = [parse_indian_number(cell) for cell in row if cell and re.search(Config.INDIAN_NUMBER_PATTERN, str(cell))]
                                 if len(nums) >= 3:
@@ -384,7 +374,6 @@ def parse_financial_table(file) -> FinancialData:
                                 nums = [parse_indian_number(cell) for cell in row if cell and re.search(Config.INDIAN_NUMBER_PATTERN, str(cell))]
                                 if nums:
                                     data.employee_share = nums[-1]
-                    # Grand Total
                     for row in table:
                         if row and any(cell and 'GRAND TOTAL' in str(cell).upper() for cell in row):
                             nums = [parse_indian_number(cell) for cell in row if cell and re.search(Config.INDIAN_NUMBER_PATTERN, str(cell))]
@@ -395,9 +384,6 @@ def parse_financial_table(file) -> FinancialData:
         logger.warning(f"Table parsing failed: {e}")
     return data
 
-# ============================================================================
-# REGEX FALLBACK FOR FINANCIAL DATA (per chunk)
-# ============================================================================
 def parse_financial_regex(text: str) -> FinancialData:
     data = FinancialData()
     lines = text.split('\n')
@@ -432,7 +418,7 @@ def parse_financial_regex(text: str) -> FinancialData:
     return data
 
 # ============================================================================
-# MAIN PARSER - COMBINED
+# MAIN PARSER
 # ============================================================================
 def parse_pdf(file) -> List[ChallanRecord]:
     records = []
@@ -443,8 +429,6 @@ def parse_pdf(file) -> List[ChallanRecord]:
         return records
     
     est_code, est_name = extract_establishment(full_text)
-    
-    # Split into individual challans by "system generated challan" or "PROVISIONAL CHALLAN"
     chunks = re.split(r'(?=system generated challan|PROVISIONAL CHALLAN)', full_text, flags=re.I)
     for chunk in chunks:
         if not chunk.strip():
@@ -452,12 +436,7 @@ def parse_pdf(file) -> List[ChallanRecord]:
         pdf_type = detect_pdf_type(chunk)
         wage_month = extract_wage_month(chunk)
         gen_dt, gen_date_str = extract_generation_date(chunk)
-        
-        # Try table extraction first (requires file), but we can't per-chunk; use regex per chunk
-        # We'll use regex fallback for per-chunk data, and table for overall if needed
         fin = parse_financial_regex(chunk)
-        # If regex didn't find much, try table extraction on the whole file (but we lose per-chunk)
-        # We'll combine: use regex results, but if some values are zero, try table extraction
         if fin.grand_total == 0:
             file.seek(0)
             table_fin = parse_financial_table(file)
@@ -467,20 +446,16 @@ def parse_pdf(file) -> List[ChallanRecord]:
             fin.pension_share = table_fin.pension_share or fin.pension_share
             fin.edli_share = table_fin.edli_share or fin.edli_share
             fin.grand_total = table_fin.grand_total or fin.grand_total
-        
-        # Subscribers & wages from chunk
         subs, wages = extract_subscribers_wages(chunk)
         if subs:
             fin.total_subscribers = subs
         if wages:
             fin.total_wages = wages
-        
         due_date = calculate_due_date(wage_month)
         due_date_str = due_date.strftime("%d-%b-%Y") if due_date else "N/A"
         late_days = (gen_dt.date() - due_date.date()).days if gen_dt and due_date else 0
         status = FilingStatus.LATE if late_days > 0 else FilingStatus.EARLY if late_days < 0 else FilingStatus.ON_TIME
         disallowance = fin.employee_share if late_days > 0 else 0.0
-        
         record = ChallanRecord(
             file_name=file.name,
             pdf_type=pdf_type.value,
@@ -510,7 +485,7 @@ def parse_pdf(file) -> List[ChallanRecord]:
     return records
 
 # ============================================================================
-# VALIDATION ENGINE
+# VALIDATION
 # ============================================================================
 def validate_record(record: ChallanRecord) -> List[str]:
     errors = []
@@ -665,6 +640,9 @@ def render_css():
     .stTabs [data-baseweb="tab-list"] { gap: 8px; }
     .stTabs [data-baseweb="tab"] { border-radius: 8px; padding: 8px 16px; background: rgba(255,255,255,0.5); }
     .stTabs [aria-selected="true"] { background: #2563eb; color: white; }
+    .export-section { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin: 20px 0; }
+    .export-btn { flex: 1; min-width: 120px; }
+    .excel-btn { background: #1e7e34 !important; border-color: #1e7e34 !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -678,12 +656,44 @@ def render_dashboard(records: List[ChallanRecord]):
     late_count = len(df[df['Late Days'] > 0])
     compliance = ((len(df) - late_count) / len(df) * 100) if len(df) > 0 else 100
 
+    # Metrics
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("💰 Total PF Audited", f"Rs.{total_pf:,.2f}")
     col2.metric("⚠️ Tax Disallowance", f"Rs.{emp_dis:,.2f}", delta=f"{late_count} late")
     col3.metric("📋 Total Records", f"{len(df)}")
     col4.metric("✅ Compliance Rate", f"{compliance:.1f}%")
 
+    # EXPORT SECTION - PROMINENT, EXCEL FIRST
+    st.markdown("### 📥 Export Data")
+    st.markdown("Download the full audit data in your preferred format. **Excel** is recommended for detailed analysis.")
+    
+    # Create columns for export buttons, making Excel larger and first
+    col_e1, col_e2, col_e3, col_e4, col_e5 = st.columns([2, 1, 1, 1, 1])
+    with col_e1:
+        excel_data = generate_excel(df)
+        st.download_button(
+            label="📊 **Download Excel (Recommended)**",
+            data=excel_data,
+            file_name=f"PF_Audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            use_container_width=True,
+            type="primary"  # highlights the button
+        )
+    with col_e2:
+        pdf_data = generate_pdf(df, total_pf, emp_dis, len(df), compliance)
+        st.download_button("📜 PDF Certificate", pdf_data, f"PF_Certificate_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf", use_container_width=True)
+    with col_e3:
+        csv_data = df.to_csv(index=False).encode('utf-8')
+        st.download_button("📄 CSV", csv_data, f"PF_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", use_container_width=True)
+    with col_e4:
+        json_data = generate_json(df)
+        st.download_button("📦 JSON", json_data, f"PF_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json", use_container_width=True)
+    with col_e5:
+        html_data = generate_html_report(df, total_pf, emp_dis, len(df), compliance)
+        st.download_button("🌐 HTML", html_data, f"PF_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html", use_container_width=True)
+
+    st.markdown("---")
+    
+    # Tabs for rest of content
     tab1, tab2, tab3, tab4 = st.tabs(["📈 Overview", "📊 Analytics", "📋 Raw Data", "🔍 Audit Log"])
     with tab1:
         col_left, col_right = st.columns(2)
@@ -719,23 +729,6 @@ def render_dashboard(records: List[ChallanRecord]):
             if col in display_df.columns:
                 display_df[col] = display_df[col].apply(lambda x: f"Rs.{x:,.2f}" if isinstance(x, (int, float)) else x)
         st.dataframe(display_df, use_container_width=True, height=400)
-        st.markdown("### 📥 Export Reports")
-        c1,c2,c3,c4,c5 = st.columns(5)
-        with c1:
-            excel_data = generate_excel(df)
-            st.download_button("📊 Excel", excel_data, f"PF_Audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx", use_container_width=True)
-        with c2:
-            pdf_data = generate_pdf(df, total_pf, emp_dis, len(df), compliance)
-            st.download_button("📜 PDF", pdf_data, f"PF_Certificate_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf", use_container_width=True)
-        with c3:
-            csv_data = df.to_csv(index=False).encode('utf-8')
-            st.download_button("📄 CSV", csv_data, f"PF_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", use_container_width=True)
-        with c4:
-            json_data = generate_json(df)
-            st.download_button("📦 JSON", json_data, f"PF_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json", use_container_width=True)
-        with c5:
-            html_data = generate_html_report(df, total_pf, emp_dis, len(df), compliance)
-            st.download_button("🌐 HTML", html_data, f"PF_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html", use_container_width=True)
     with tab4:
         st.subheader("📋 Audit Log")
         log_data = []
@@ -757,7 +750,7 @@ def main():
     st.markdown("""
     <div class="header-card">
         <div class="main-title">🏢 PF CHALLAN AI COMMAND CENTER</div>
-        <div style="font-size:1.1rem; color:#475569; margin-top:0.5rem;">Enterprise Statutory Audit Suite • v5.1 (Fixed)</div>
+        <div style="font-size:1.1rem; color:#475569; margin-top:0.5rem;">Enterprise Statutory Audit Suite • v5.2 (Enhanced UI)</div>
     </div>
     """, unsafe_allow_html=True)
     
@@ -768,7 +761,7 @@ def main():
     ✅ Supports <strong>Combined</strong> & <strong>Provisional</strong> formats<br>
     ✅ Guaranteed wage month extraction (multiple regex patterns)<br>
     ✅ Table-based financial extraction (pdfplumber) + regex fallback<br>
-    ✅ Full audit trail, validation, and exports
+    ✅ Full audit trail, validation, and exports (Excel, PDF, CSV, JSON, HTML)
     </small>
     """, unsafe_allow_html=True)
     uploaded_files = st.file_uploader("Drop PDFs here", type=['pdf'], accept_multiple_files=True, label_visibility="collapsed")
