@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PF CHALLAN AI COMMAND CENTER v5.0 - ULTIMATE PARSER
-- Guaranteed wage month extraction
-- Table-based financial extraction (pdfplumber)
-- Multi-format support (Combined / Provisional)
-- Full audit trail & validation
-- Interactive dashboard with raw text viewer
+PF CHALLAN AI COMMAND CENTER v5.1
+- Guaranteed wage month extraction (multiple patterns)
+- Table + regex financial parsing
+- Full dashboard & exports
+- Fixed NameError: warnings imported
 """
 
 import streamlit as st
@@ -27,6 +26,7 @@ from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum
 import hashlib
+import warnings  # ✅ FIX: required for filterwarnings
 
 # Optional OCR
 try:
@@ -245,7 +245,7 @@ def extract_trrn(text: str) -> str:
     return match.group(1) if match else ""
 
 # ============================================================================
-# EXTRACT WAGE MONTH - ULTIMATE PATTERNS
+# EXTRACT WAGE MONTH - ULTIMATE PATTERNS (MOST IMPORTANT)
 # ============================================================================
 def extract_wage_month(text: str) -> str:
     patterns = [
@@ -255,22 +255,31 @@ def extract_wage_month(text: str) -> str:
         r'PROVISIONAL CHALLAN FOR WAGE MONTH\s*[:]\s*([A-Za-z]+\s+\d{4})',
         r'Month\s*[:]\s*([A-Za-z]+\s+\d{4})',
         r'for the month of\s+([A-Za-z]+\s+\d{4})',
-        r'([A-Za-z]+\s+\d{4})\s+ECR'  # sometimes before ECR
+        r'([A-Za-z]+\s+\d{4})\s+ECR',  # sometimes before ECR
+        r'([A-Za-z]+-\d{4})',          # e.g. "May-2024"
+        r'([A-Za-z]+/\d{4})'           # e.g. "May/2024"
     ]
     for pattern in patterns:
         match = re.search(pattern, text, re.I)
         if match:
             raw = match.group(1).strip()
-            # Ensure proper case
+            # Convert hyphen or slash to space
+            raw = raw.replace('-', ' ').replace('/', ' ')
             parts = raw.split()
             if len(parts) >= 2:
-                return f"{parts[0].title()} {parts[1]}"
+                # Ensure proper case and 4-digit year
+                month = parts[0].title()
+                year = parts[1].strip()
+                if len(year) == 4 and year.isdigit():
+                    return f"{month} {year}"
+                elif len(year) == 2 and year.isdigit():
+                    # assume 20xx
+                    return f"{month} 20{year}"
             return raw
     # Fallback: look for any month+year near "wage" or "month"
     month_year_pattern = r'\b(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}\b'
     matches = re.findall(month_year_pattern, text, re.I)
     if matches:
-        # Pick the one that seems most relevant (maybe the first)
         raw = matches[0]
         parts = raw.split()
         return f"{parts[0].title()} {parts[1]}"
@@ -310,7 +319,7 @@ def extract_subscribers_wages(text: str) -> Tuple[int, float]:
     return subscribers, wages
 
 # ============================================================================
-# PARSE FINANCIAL TABLE - USING PDFPLUMBER TABLES
+# PARSE FINANCIAL TABLE - USING PDFPLUMBER TABLES + REGEX FALLBACK
 # ============================================================================
 def parse_financial_table(file) -> FinancialData:
     data = FinancialData()
@@ -321,74 +330,105 @@ def parse_financial_table(file) -> FinancialData:
                 for table in tables:
                     if not table:
                         continue
-                    # Look for a table with "PARTICULARS" or "Administration Charges"
+                    # Look for header row containing "PARTICULARS" or "A/C"
                     header_row = None
                     for row in table:
-                        if row and any(cell and 'PARTICULARS' in str(cell).upper() for cell in row):
+                        if row and any(cell and ('PARTICULARS' in str(cell).upper() or 'A/C' in str(cell).upper()) for cell in row):
                             header_row = row
                             break
-                    if header_row:
-                        # Find indices of account columns
-                        # Typically: A/C.01, A/C.02, A/C.10, A/C.21, A/C.22
-                        # We'll try to identify by header text
-                        ac_indices = {}
-                        for idx, cell in enumerate(header_row):
-                            if cell:
-                                cell_str = str(cell).upper()
-                                if 'A/C.01' in cell_str or 'A/C 01' in cell_str:
-                                    ac_indices['01'] = idx
-                                elif 'A/C.02' in cell_str or 'A/C 02' in cell_str:
-                                    ac_indices['02'] = idx
-                                elif 'A/C.10' in cell_str or 'A/C 10' in cell_str:
-                                    ac_indices['10'] = idx
-                                elif 'A/C.21' in cell_str or 'A/C 21' in cell_str:
-                                    ac_indices['21'] = idx
-                                elif 'A/C.22' in cell_str or 'A/C 22' in cell_str:
-                                    ac_indices['22'] = idx
-                        # Now iterate over rows to find data rows
-                        for row in table:
-                            if not row or row == header_row:
-                                continue
-                            # Check if row contains a known label
-                            row_text = ' '.join([str(cell) for cell in row if cell]).upper()
-                            if 'ADMINISTRATION CHARGES' in row_text:
-                                # Find the numeric value: typically in A/C.02 or the last number
+                    if not header_row:
+                        continue
+                    # Find indices of account columns
+                    ac_indices = {}
+                    for idx, cell in enumerate(header_row):
+                        if cell:
+                            cell_str = str(cell).upper()
+                            if 'A/C.01' in cell_str or 'A/C 01' in cell_str:
+                                ac_indices['01'] = idx
+                            elif 'A/C.02' in cell_str or 'A/C 02' in cell_str:
+                                ac_indices['02'] = idx
+                            elif 'A/C.10' in cell_str or 'A/C 10' in cell_str:
+                                ac_indices['10'] = idx
+                            elif 'A/C.21' in cell_str or 'A/C 21' in cell_str:
+                                ac_indices['21'] = idx
+                            elif 'A/C.22' in cell_str or 'A/C 22' in cell_str:
+                                ac_indices['22'] = idx
+                    # Iterate data rows
+                    for row in table:
+                        if not row or row == header_row:
+                            continue
+                        row_text = ' '.join([str(cell) for cell in row if cell]).upper()
+                        if 'ADMINISTRATION CHARGES' in row_text:
+                            nums = [parse_indian_number(cell) for cell in row if cell and re.search(Config.INDIAN_NUMBER_PATTERN, str(cell))]
+                            if nums:
+                                data.admin_charges = nums[-1]
+                        elif "EMPLOYER'S SHARE" in row_text or 'EMPLOYER SHARE' in row_text:
+                            # Use indices if available
+                            if '01' in ac_indices and ac_indices['01'] < len(row):
+                                data.employer_share = parse_indian_number(row[ac_indices['01']])
+                            if '10' in ac_indices and ac_indices['10'] < len(row):
+                                data.pension_share = parse_indian_number(row[ac_indices['10']])
+                            if '21' in ac_indices and ac_indices['21'] < len(row):
+                                data.edli_share = parse_indian_number(row[ac_indices['21']])
+                            # If no indices, take numbers sequentially
+                            if not ac_indices:
+                                nums = [parse_indian_number(cell) for cell in row if cell and re.search(Config.INDIAN_NUMBER_PATTERN, str(cell))]
+                                if len(nums) >= 3:
+                                    data.employer_share = nums[0]
+                                    data.pension_share = nums[1] if len(nums)>1 else 0
+                                    data.edli_share = nums[2] if len(nums)>2 else 0
+                        elif "EMPLOYEE'S SHARE" in row_text or 'EMPLOYEE SHARE' in row_text:
+                            if '01' in ac_indices and ac_indices['01'] < len(row):
+                                data.employee_share = parse_indian_number(row[ac_indices['01']])
+                            else:
                                 nums = [parse_indian_number(cell) for cell in row if cell and re.search(Config.INDIAN_NUMBER_PATTERN, str(cell))]
                                 if nums:
-                                    data.admin_charges = nums[-1]  # assume last
-                            elif "EMPLOYER'S SHARE" in row_text or 'EMPLOYER SHARE' in row_text:
-                                # Employer share may span multiple accounts
-                                # We'll sum all numbers in that row, but we need to assign to correct accounts
-                                # Use indices if we have them
-                                if '01' in ac_indices and ac_indices['01'] < len(row):
-                                    data.employer_share = parse_indian_number(row[ac_indices['01']])
-                                if '10' in ac_indices and ac_indices['10'] < len(row):
-                                    data.pension_share = parse_indian_number(row[ac_indices['10']])
-                                if '21' in ac_indices and ac_indices['21'] < len(row):
-                                    data.edli_share = parse_indian_number(row[ac_indices['21']])
-                                # If no indices, try to parse all numbers and assign in order
-                                if not ac_indices:
-                                    nums = [parse_indian_number(cell) for cell in row if cell and re.search(Config.INDIAN_NUMBER_PATTERN, str(cell))]
-                                    if len(nums) >= 3:
-                                        data.employer_share = nums[0]
-                                        data.pension_share = nums[1] if len(nums)>1 else 0
-                                        data.edli_share = nums[2] if len(nums)>2 else 0
-                            elif "EMPLOYEE'S SHARE" in row_text or 'EMPLOYEE SHARE' in row_text:
-                                if '01' in ac_indices and ac_indices['01'] < len(row):
-                                    data.employee_share = parse_indian_number(row[ac_indices['01']])
-                                else:
-                                    nums = [parse_indian_number(cell) for cell in row if cell and re.search(Config.INDIAN_NUMBER_PATTERN, str(cell))]
-                                    if nums:
-                                        data.employee_share = nums[-1]
-                        # Also look for Grand Total
-                        for row in table:
-                            if row and any(cell and 'GRAND TOTAL' in str(cell).upper() for cell in row):
-                                nums = [parse_indian_number(cell) for cell in row if cell and re.search(Config.INDIAN_NUMBER_PATTERN, str(cell))]
-                                if nums:
-                                    data.grand_total = nums[-1]
-                                break
+                                    data.employee_share = nums[-1]
+                    # Grand Total
+                    for row in table:
+                        if row and any(cell and 'GRAND TOTAL' in str(cell).upper() for cell in row):
+                            nums = [parse_indian_number(cell) for cell in row if cell and re.search(Config.INDIAN_NUMBER_PATTERN, str(cell))]
+                            if nums:
+                                data.grand_total = nums[-1]
+                            break
     except Exception as e:
         logger.warning(f"Table parsing failed: {e}")
+    return data
+
+# ============================================================================
+# REGEX FALLBACK FOR FINANCIAL DATA (per chunk)
+# ============================================================================
+def parse_financial_regex(text: str) -> FinancialData:
+    data = FinancialData()
+    lines = text.split('\n')
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        lower = line.lower()
+        if 'administration charges' in lower:
+            nums = re.findall(Config.INDIAN_NUMBER_PATTERN, line)
+            if nums:
+                data.admin_charges = parse_indian_number(nums[-1])
+        elif "employer's share" in lower or "employer share" in lower:
+            nums = re.findall(Config.INDIAN_NUMBER_PATTERN, line)
+            if len(nums) >= 3:
+                data.employer_share = parse_indian_number(nums[0])
+                data.pension_share = parse_indian_number(nums[1])
+                data.edli_share = parse_indian_number(nums[2])
+            elif len(nums) >= 2:
+                data.employer_share = parse_indian_number(nums[0])
+                data.pension_share = parse_indian_number(nums[1])
+        elif "employee's share" in lower or "employee share" in lower:
+            nums = re.findall(Config.INDIAN_NUMBER_PATTERN, line)
+            if nums:
+                data.employee_share = parse_indian_number(nums[-1])
+    gt_match = re.search(r'Grand Total\s*[:]\s*([\d,]+)', text, re.I)
+    if gt_match:
+        data.grand_total = parse_indian_number(gt_match.group(1))
+    pmrpy_match = re.search(r'PMRPYABRY.*?Total remittance by Employer.*?([\d,]+)', text, re.I | re.DOTALL)
+    if pmrpy_match:
+        data.total_remittance_employer = parse_indian_number(pmrpy_match.group(1))
     return data
 
 # ============================================================================
@@ -402,7 +442,6 @@ def parse_pdf(file) -> List[ChallanRecord]:
         logger.error("No text extracted")
         return records
     
-    # Get establishment details once
     est_code, est_name = extract_establishment(full_text)
     
     # Split into individual challans by "system generated challan" or "PROVISIONAL CHALLAN"
@@ -414,13 +453,22 @@ def parse_pdf(file) -> List[ChallanRecord]:
         wage_month = extract_wage_month(chunk)
         gen_dt, gen_date_str = extract_generation_date(chunk)
         
-        # Try to get financial data using table extraction (requires file)
-        file.seek(0)
-        fin = parse_financial_table(file)  # This may not get per-chunk data if multiple pages
-        # Better: we can try regex as fallback for per-chunk
-        fin = parse_financial_regex(chunk)  # we'll implement regex fallback
+        # Try table extraction first (requires file), but we can't per-chunk; use regex per chunk
+        # We'll use regex fallback for per-chunk data, and table for overall if needed
+        fin = parse_financial_regex(chunk)
+        # If regex didn't find much, try table extraction on the whole file (but we lose per-chunk)
+        # We'll combine: use regex results, but if some values are zero, try table extraction
+        if fin.grand_total == 0:
+            file.seek(0)
+            table_fin = parse_financial_table(file)
+            fin.employer_share = table_fin.employer_share or fin.employer_share
+            fin.employee_share = table_fin.employee_share or fin.employee_share
+            fin.admin_charges = table_fin.admin_charges or fin.admin_charges
+            fin.pension_share = table_fin.pension_share or fin.pension_share
+            fin.edli_share = table_fin.edli_share or fin.edli_share
+            fin.grand_total = table_fin.grand_total or fin.grand_total
         
-        # Get subscribers & wages from chunk
+        # Subscribers & wages from chunk
         subs, wages = extract_subscribers_wages(chunk)
         if subs:
             fin.total_subscribers = subs
@@ -460,46 +508,6 @@ def parse_pdf(file) -> List[ChallanRecord]:
         record.validation_errors = validate_record(record)
         records.append(record)
     return records
-
-# ============================================================================
-# REGEX FALLBACK FOR FINANCIAL DATA (per chunk)
-# ============================================================================
-def parse_financial_regex(text: str) -> FinancialData:
-    data = FinancialData()
-    # Try to find amounts in the table using regex patterns
-    # Look for lines like "Administration Charges 0 500 0" etc.
-    lines = text.split('\n')
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        lower = line.lower()
-        if 'administration charges' in lower:
-            nums = re.findall(Config.INDIAN_NUMBER_PATTERN, line)
-            if nums:
-                data.admin_charges = parse_indian_number(nums[-1])
-        elif "employer's share" in lower or "employer share" in lower:
-            nums = re.findall(Config.INDIAN_NUMBER_PATTERN, line)
-            if len(nums) >= 3:
-                data.employer_share = parse_indian_number(nums[0])
-                data.pension_share = parse_indian_number(nums[1])
-                data.edli_share = parse_indian_number(nums[2])
-            elif len(nums) >= 2:
-                data.employer_share = parse_indian_number(nums[0])
-                data.pension_share = parse_indian_number(nums[1])
-        elif "employee's share" in lower or "employee share" in lower:
-            nums = re.findall(Config.INDIAN_NUMBER_PATTERN, line)
-            if nums:
-                data.employee_share = parse_indian_number(nums[-1])
-    # Grand Total
-    gt_match = re.search(r'Grand Total\s*[:]\s*([\d,]+)', text, re.I)
-    if gt_match:
-        data.grand_total = parse_indian_number(gt_match.group(1))
-    # PMRPY/ABRY
-    pmrpy_match = re.search(r'PMRPYABRY.*?Total remittance by Employer.*?([\d,]+)', text, re.I | re.DOTALL)
-    if pmrpy_match:
-        data.total_remittance_employer = parse_indian_number(pmrpy_match.group(1))
-    return data
 
 # ============================================================================
 # VALIDATION ENGINE
@@ -542,7 +550,6 @@ def generate_excel(df: pd.DataFrame) -> bytes:
                 if col_name in financial_cols and isinstance(ws.cell(row=row, column=col_idx).value, (int, float)):
                     ws.cell(row=row, column=col_idx).number_format = '₹#,##0.00'
                     ws.cell(row=row, column=col_idx).alignment = Alignment(horizontal='right')
-        # Summary sheet
         summary_df = pd.DataFrame({
             'Metric': ['Total PF Audited', 'Total Employee Disallowance', 'Total Records', 'Compliance Rate (%)'],
             'Value': [
@@ -750,7 +757,7 @@ def main():
     st.markdown("""
     <div class="header-card">
         <div class="main-title">🏢 PF CHALLAN AI COMMAND CENTER</div>
-        <div style="font-size:1.1rem; color:#475569; margin-top:0.5rem;">Enterprise Statutory Audit Suite • v5.0 (Ultimate Parser)</div>
+        <div style="font-size:1.1rem; color:#475569; margin-top:0.5rem;">Enterprise Statutory Audit Suite • v5.1 (Fixed)</div>
     </div>
     """, unsafe_allow_html=True)
     
