@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 EPF Combined Challan Extractor
 ================================
