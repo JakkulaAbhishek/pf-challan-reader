@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-EPF Combined Challan Extractor
-================================
+EPF Combined Challan Extractor - Streamlit Edition
+====================================================
 Reads one or more EPFO "Combined Challan of A/C No. 01, 02, 10, 21 & 22"
 PDF files (the kind downloaded from unifiedportal-emp.epfindia.gov.in) and
 extracts, per wage month:
@@ -17,44 +17,29 @@ extracts, per wage month:
     - Date the challan was generated (system generated date)
     - Statutory due date (15th of the month following the wage month)
     - Deposit status: "Allowed" / "Disallowed"
-      (flags late deposit of employee's contribution, relevant for
-       disallowance under Sec 36(1)(va) r.w.s 2(24)(x) of the
-       Income-tax Act, 1961)
 
 Output: a single, formatted .xlsx workbook with one row per challan
 (one PDF can contain many challans/pages - e.g. one per month).
 
-USAGE
------
-    python epf_challan_extractor.py <input_path> [-o OUTPUT.xlsx]
-
-    <input_path> can be:
-        - a single PDF file, or
-        - a folder containing multiple PDF files (all *.pdf are scanned)
-
-EXAMPLES
---------
-    python epf_challan_extractor.py challan.pdf
-    python epf_challan_extractor.py ./challans_folder -o epf_summary.xlsx
+RUN
+---
+    streamlit run epf_challan_streamlit.py
 
 DEPENDENCIES
 ------------
-    pip install pdfplumber openpyxl
+    pip install streamlit pdfplumber openpyxl pandas
 
 NOTE ON THE "ALLOWED/DISALLOWED" COLUMN
-----------------------------------------
+--------------------------------------
 The PDF only tells us the date the *challan* was system-generated from the
 uploaded ECR - it is not proof of the actual bank remittance date. This
 script uses the challan-generation date as the best available proxy for
 the deposit date, and compares it against the statutory due date (15 days
-from the end of the wage month, per EPF Scheme para 38). Verify the real
-bank payment/UTR date before relying on this for a tax audit report -
-see the "Note" column in the output for this caveat.
+from the end of the wage month, per EPF Scheme para 38).
 
 Output workbook has three sheets:
     1. "EPF Challan Summary" - colour-coded, one row per challan
-    2. "Dashboard"            - KPI cards + charts (trend, contribution
-                                 mix, subscriber growth, compliance)
+    2. "Dashboard"            - KPI cards + charts
     3. "Notes"                - methodology / caveats
 
 --------------------------------------------------------------------
@@ -63,18 +48,19 @@ Email    : jakkulaabhishek5@gmail.com
 --------------------------------------------------------------------
 """
 
-import argparse
-import glob
-import os
+import io
 import re
 import sys
 from calendar import monthrange
 from datetime import date, datetime
 
+import streamlit as st
+
 try:
     import pdfplumber
 except ImportError:
-    sys.exit("Missing dependency. Install with:  pip install pdfplumber")
+    st.error("Missing dependency. Install with:  pip install pdfplumber")
+    sys.exit(1)
 
 try:
     from openpyxl import Workbook
@@ -82,9 +68,15 @@ try:
     from openpyxl.utils import get_column_letter
     from openpyxl.chart import BarChart, LineChart, PieChart, Reference
     from openpyxl.chart.label import DataLabelList
-    from openpyxl.formatting.rule import CellIsRule
 except ImportError:
-    sys.exit("Missing dependency. Install with:  pip install openpyxl")
+    st.error("Missing dependency. Install with:  pip install openpyxl")
+    sys.exit(1)
+
+try:
+    import pandas as pd
+except ImportError:
+    st.error("Missing dependency. Install with:  pip install pandas")
+    sys.exit(1)
 
 AUTHOR_NAME = "Jakkula Abhishek"
 AUTHOR_EMAIL = "jakkulaabhishek5@gmail.com"
@@ -112,6 +104,9 @@ MONTHS = {
 NUM_RE = r"[\d,]+(?:\.\d+)?"
 
 
+# ---------------------------------------------------------------------------
+# Core parsing logic (unchanged)
+# ---------------------------------------------------------------------------
 def _num(s):
     """Convert a string like '1,23,456' or '0' to a float. Returns None if blank."""
     if s is None:
@@ -126,10 +121,7 @@ def _num(s):
 
 
 def parse_challan_text(text, source_file, page_no):
-    """Extract one challan's fields from a single page of extracted text.
-
-    Returns a dict, or None if this page doesn't look like a challan page.
-    """
+    """Extract one challan's fields from a single page of extracted text."""
     if "EMPLOYEES' PROVIDENT FUND ORGANISATION" not in text.upper():
         return None
 
@@ -188,7 +180,6 @@ def parse_challan_text(text, source_file, page_no):
     else:
         rec["wages_epf"] = rec["wages_eps"] = rec["wages_edli"] = None
 
-    # Particulars rows - last number on the line is the row's TOTAL column.
     m = re.search(
         rf"1\s+Administration Charges\s+({NUM_RE})\s+({NUM_RE})\s+({NUM_RE})\s+({NUM_RE})\s+({NUM_RE})\s+({NUM_RE})",
         text,
@@ -223,20 +214,14 @@ def parse_challan_text(text, source_file, page_no):
     else:
         rec["generated_on"] = None
 
-    # Statutory due date: 15 days from the close of the wage month
-    # (EPF Scheme 1952, para 38 - contributions payable within 15 days
-    # of the close of the month).
     if rec["wage_month_num"] and rec["wage_year"]:
         last_day = monthrange(rec["wage_year"], rec["wage_month_num"])[1]
         month_end = date(rec["wage_year"], rec["wage_month_num"], last_day)
-        # add 15 days, rolling into the next month correctly
         due = date.fromordinal(month_end.toordinal() + 15)
         rec["due_date"] = due
     else:
         rec["due_date"] = None
 
-    # Allowed / Disallowed status - compares challan-generation date to
-    # the statutory due date. See module docstring for the caveat.
     if rec["generated_on"] and rec["due_date"]:
         if rec["generated_on"].date() <= rec["due_date"]:
             rec["status"] = "Allowed"
@@ -248,32 +233,27 @@ def parse_challan_text(text, source_file, page_no):
     return rec
 
 
-def extract_from_pdf(path):
+def extract_from_pdf(file_obj, file_name):
+    """Extract all challan records from an uploaded PDF file object."""
     records = []
-    with pdfplumber.open(path) as pdf:
+    with pdfplumber.open(file_obj) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
             text = page.extract_text() or ""
-            rec = parse_challan_text(text, os.path.basename(path), i)
+            rec = parse_challan_text(text, file_name, i)
             if rec:
                 records.append(rec)
     return records
 
 
-def gather_pdfs(input_path):
-    if os.path.isdir(input_path):
-        return sorted(glob.glob(os.path.join(input_path, "*.pdf")))
-    if os.path.isfile(input_path) and input_path.lower().endswith(".pdf"):
-        return [input_path]
-    sys.exit(f"'{input_path}' is not a PDF file or a folder containing PDFs.")
-
-
+# ---------------------------------------------------------------------------
+# Excel generation helpers (unchanged)
+# ---------------------------------------------------------------------------
 def _thin_border():
     side = Side(style="thin", color="B4C6E7")
     return Border(left=side, right=side, top=side, bottom=side)
 
 
 def _brand_banner(ws, ncols, subtitle):
-    """Draws the two-row coloured branding banner used on every sheet."""
     last_col = get_column_letter(ncols)
     ws.merge_cells(f"A1:{last_col}1")
     ws.merge_cells(f"A2:{last_col}2")
@@ -294,7 +274,6 @@ def _brand_banner(ws, ncols, subtitle):
 
 
 def _kpi_card(ws, row, col, label, value, number_format, fill_color):
-    """Draws a 2-row-tall, 2-col-wide coloured KPI card starting at (row, col)."""
     c1 = get_column_letter(col)
     c2 = get_column_letter(col + 1)
     ws.merge_cells(f"{c1}{row}:{c2}{row}")
@@ -317,7 +296,8 @@ def _kpi_card(ws, row, col, label, value, number_format, fill_color):
     ws.row_dimensions[row + 1].height = 26
 
 
-def write_excel(records, out_path):
+def write_excel(records, out_buffer):
+    """Build the workbook and write it into a file-like buffer."""
     records = sorted(
         records,
         key=lambda r: (r.get("wage_year") or 0, r.get("wage_month_num") or 0),
@@ -415,7 +395,6 @@ def write_excel(records, out_path):
 
     last_data_row = row_idx - 1
 
-    # Totals row
     total_row = row_idx
     total_fill = PatternFill(start_color=CLR_ACCENT2, end_color=CLR_ACCENT2, fill_type="solid")
     tot_label = ws.cell(row=total_row, column=1, value="TOTAL")
@@ -432,7 +411,6 @@ def write_excel(records, out_path):
         cell.font = Font(bold=True, name="Arial", color=CLR_PRIMARY)
         cell.number_format = "#,##0.00"
 
-    # Column widths
     widths = [14, 16, 26, 12, 12, 12, 10, 12, 16, 18, 18, 14, 18, 14, 16, 12, 30, 6]
     for col_idx, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col_idx)].width = w
@@ -443,9 +421,7 @@ def write_excel(records, out_path):
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.print_title_rows = f"{HEADER_ROW}:{HEADER_ROW}"
 
-    # ------------------------------------------------------------------
-    # Dashboard sheet - KPIs + charts
-    # ------------------------------------------------------------------
+    # Dashboard
     dash = wb.create_sheet("Dashboard")
     dash.sheet_view.showGridLines = False
     dash.page_setup.orientation = "landscape"
@@ -480,10 +456,6 @@ def write_excel(records, out_path):
     _kpi_card(dash, kpi_row, 11, "ON-TIME COMPLIANCE", compliance_pct, "0.0%",
               "006100" if compliance_pct >= 0.9 else CLR_RED_TXT)
 
-    for col_idx, w in enumerate([2] * dash_ncols, start=1):
-        pass  # widths set below after chart placement
-
-    # Hidden helper table for pie chart (contribution mix) and status counts
     helper_row0 = 40
     dash.cell(row=helper_row0, column=1, value="Component").font = Font(bold=True, name="Arial")
     dash.cell(row=helper_row0, column=2, value="Amount").font = Font(bold=True, name="Arial")
@@ -504,8 +476,6 @@ def write_excel(records, out_path):
     dash.cell(row=status_row0 + 2, column=1, value="Disallowed")
     dash.cell(row=status_row0 + 2, column=2, value=disallowed_count)
 
-    # References back into the data sheet
-    data_sheet = "EPF Challan Summary"
     cat_ref = Reference(ws, min_col=1, min_row=DATA_START_ROW, max_row=last_data_row)
     month_col = headers.index("Wage Month") + 1
     admin_col = headers.index("Administration Charges") + 1
@@ -515,7 +485,6 @@ def write_excel(records, out_path):
     subs_col = headers.index("EPF Subscribers") + 1
     cats = Reference(ws, min_col=month_col, min_row=DATA_START_ROW, max_row=last_data_row)
 
-    # Chart 1: Grand Total trend (line)
     line = LineChart()
     line.title = "Grand Total Remittance Trend (\u20b9)"
     line.style = 12
@@ -532,7 +501,6 @@ def write_excel(records, out_path):
         s.graphicalProperties.line.solidFill = CLR_ACCENT
     dash.add_chart(line, "A9")
 
-    # Chart 2: Employer vs Employee vs Admin (clustered bar)
     bar = BarChart()
     bar.type = "col"
     bar.grouping = "clustered"
@@ -553,7 +521,6 @@ def write_excel(records, out_path):
         s.graphicalProperties.solidFill = color
     dash.add_chart(bar, "A28")
 
-    # Chart 3: Contribution mix (pie)
     pie = PieChart()
     pie.title = "Overall Contribution Mix"
     pie.height, pie.width = 9, 10
@@ -565,7 +532,6 @@ def write_excel(records, out_path):
     pie.dataLabels.showPercent = True
     dash.add_chart(pie, "N9")
 
-    # Chart 4: Subscriber growth (bar)
     subs_bar = BarChart()
     subs_bar.type = "col"
     subs_bar.title = "EPF Subscriber Count by Month"
@@ -580,7 +546,6 @@ def write_excel(records, out_path):
         s.graphicalProperties.solidFill = CLR_GOLD
     dash.add_chart(subs_bar, "N28")
 
-    # Chart 5: Compliance status (bar)
     comp_bar = BarChart()
     comp_bar.type = "col"
     comp_bar.title = "Deposit Compliance: Allowed vs Disallowed"
@@ -596,9 +561,7 @@ def write_excel(records, out_path):
     for col_idx in range(1, dash_ncols + 1):
         dash.column_dimensions[get_column_letter(col_idx)].width = 11
 
-    # ------------------------------------------------------------------
     # Notes sheet
-    # ------------------------------------------------------------------
     notes = wb.create_sheet("Notes")
     notes.sheet_view.showGridLines = False
     notes.page_setup.orientation = "landscape"
@@ -631,35 +594,199 @@ def write_excel(records, out_path):
         cell.alignment = Alignment(wrap_text=True, vertical="top")
     notes.column_dimensions["A"].width = 130
 
-    wb.save(out_path)
+    wb.save(out_buffer)
+
+
+# ---------------------------------------------------------------------------
+# Streamlit UI
+# ---------------------------------------------------------------------------
+def build_dataframe(records):
+    """Build a preview DataFrame matching the Excel summary sheet."""
+    rows = []
+    for r in sorted(
+        records,
+        key=lambda x: (x.get("wage_year") or 0, x.get("wage_month_num") or 0),
+    ):
+        days_diff = None
+        if r["generated_on"] and r["due_date"]:
+            days_diff = (r["generated_on"].date() - r["due_date"]).days
+        rows.append({
+            "Wage Month": r.get("wage_month"),
+            "Establishment Code": r.get("establishment_code"),
+            "Establishment Name": r.get("establishment_name"),
+            "TRRN": r.get("trrn"),
+            "ECR Id": r.get("ecr_id"),
+            "LIN": r.get("lin"),
+            "EPF Subscribers": r.get("subscribers_epf"),
+            "EPF Wages": r.get("wages_epf"),
+            "Administration Charges": r.get("admin_charges_total"),
+            "Employer's Share Total": r.get("employer_share_total"),
+            "Employee's Share Total": r.get("employee_share_total"),
+            "Grand Total": r.get("grand_total"),
+            "Challan Generated On": r["generated_on"].strftime("%d-%b-%Y %H:%M")
+                if r.get("generated_on") else None,
+            "Statutory Due Date": r["due_date"].strftime("%d-%b-%Y")
+                if r.get("due_date") else None,
+            "Days Late (+) / Early (-)": days_diff,
+            "Status": r.get("status"),
+            "Source File": r.get("source_file"),
+            "Page": r.get("page"),
+        })
+    return pd.DataFrame(rows)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Extract EPF combined challan data to Excel.")
-    parser.add_argument("input_path", help="A PDF file, or a folder containing PDF files.")
-    parser.add_argument(
-        "-o", "--output", default="epf_challan_summary.xlsx",
-        help="Output .xlsx path (default: epf_challan_summary.xlsx)",
+    st.set_page_config(
+        page_title="EPF Challan Extractor",
+        page_icon="📊",
+        layout="wide",
     )
-    args = parser.parse_args()
 
-    pdf_files = gather_pdfs(args.input_path)
-    if not pdf_files:
-        sys.exit("No PDF files found.")
+    st.markdown(
+        f"""
+        <div style="background:linear-gradient(90deg,#1F4E78,#2E75B6);
+                    padding:18px 24px;border-radius:10px;">
+            <h1 style="color:white;margin:0;font-family:Arial;">
+                {BRAND_TITLE.upper()}
+            </h1>
+            <p style="color:#FFC000;font-weight:bold;margin:6px 0 0 0;font-family:Arial;">
+                Prepared by {AUTHOR_NAME} &nbsp;|&nbsp; {AUTHOR_EMAIL}
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    all_records = []
-    for pdf_path in pdf_files:
-        recs = extract_from_pdf(pdf_path)
-        if not recs:
-            print(f"  [warning] no challans found in {pdf_path}", file=sys.stderr)
-        all_records.extend(recs)
+    st.write("")
+    st.write(
+        "Upload one or more EPFO **Combined Challan** PDFs (A/C No. 01, 02, 10, 21 & 22). "
+        "The app extracts per-month challan data and produces a formatted Excel workbook "
+        "with a summary sheet, a dashboard of KPIs & charts, and a notes sheet."
+    )
 
-    if not all_records:
-        sys.exit("No challan data could be extracted from the given file(s).")
+    uploaded_files = st.file_uploader(
+        "Upload EPF Combined Challan PDF(s)",
+        type=["pdf"],
+        accept_multiple_files=True,
+    )
 
-    write_excel(all_records, args.output)
-    print(f"Done. Extracted {len(all_records)} challan(s) from {len(pdf_files)} PDF(s).")
-    print(f"Output written to: {args.output}")
+    output_name = st.text_input(
+        "Output file name",
+        value="epf_challan_summary.xlsx",
+        help="The workbook that will be offered for download.",
+    )
+
+    col_run, col_clear = st.columns([1, 1])
+    with col_run:
+        run = st.button("🚀 Extract & Build Report", type="primary", use_container_width=True)
+    with col_clear:
+        clear = st.button("🔄 Reset", use_container_width=True)
+    if clear:
+        st.rerun()
+
+    if run:
+        if not uploaded_files:
+            st.warning("Please upload at least one PDF file.")
+            return
+
+        all_records = []
+        progress = st.progress(0.0, text="Processing PDFs…")
+        warnings = []
+
+        for idx, uf in enumerate(uploaded_files, start=1):
+            try:
+                recs = extract_from_pdf(uf, uf.name)
+                if not recs:
+                    warnings.append(f"No challans found in **{uf.name}**")
+                all_records.extend(recs)
+            except Exception as e:
+                warnings.append(f"Failed to process **{uf.name}**: {e}")
+            progress.progress(idx / len(uploaded_files),
+                              text=f"Processed {idx}/{len(uploaded_files)}: {uf.name}")
+
+        progress.empty()
+
+        for w in warnings:
+            st.warning(w)
+
+        if not all_records:
+            st.error("No challan data could be extracted from the uploaded file(s).")
+            return
+
+        st.success(f"Extracted **{len(all_records)}** challan(s) from "
+                   f"**{len(uploaded_files)}** PDF(s).")
+
+        df = build_dataframe(all_records)
+
+        # ---- KPI metrics -------------------------------------------------
+        total_grand = df["Grand Total"].fillna(0).sum()
+        total_employer = df["Employer's Share Total"].fillna(0).sum()
+        total_employee = df["Employee's Share Total"].fillna(0).sum()
+        total_admin = df["Administration Charges"].fillna(0).sum()
+        allowed = int((df["Status"] == "Allowed").sum())
+        disallowed = int((df["Status"] == "Disallowed").sum())
+        compliance = allowed / len(df) if len(df) else 0
+
+        st.subheader("Key Highlights")
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        c1.metric("Months Covered", f"{len(df)}")
+        c2.metric("Total Remittance (₹)", f"{total_grand:,.0f}")
+        c3.metric("Employer's Share (₹)", f"{total_employer:,.0f}")
+        c4.metric("Employee's Share (₹)", f"{total_employee:,.0f}")
+        c5.metric("Admin Charges (₹)", f"{total_admin:,.0f}")
+        c6.metric("On-Time Compliance", f"{compliance*100:.1f}%",
+                  delta=f"{allowed} ok / {disallowed} late")
+
+        st.subheader("Challan Summary Preview")
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+        # ---- Build the workbook ------------------------------------------
+        buffer = io.BytesIO()
+        write_excel(all_records, buffer)
+        buffer.seek(0)
+
+        fname = output_name.strip() or "epf_challan_summary.xlsx"
+        if not fname.lower().endswith(".xlsx"):
+            fname += ".xlsx"
+
+        st.download_button(
+            label="📥 Download Excel Report",
+            data=buffer.getvalue(),
+            file_name=fname,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            type="primary",
+        )
+
+    # ---- Notes / disclaimer --------------------------------------------
+    with st.expander("ℹ️ Methodology, notes & caveats"):
+        st.markdown(
+            """
+            **1.** *Challan Generated On* is the date EPFO's system generated the challan
+            from the employer's uploaded ECR – it is **NOT** proof of actual bank
+            payment/remittance date.
+
+            **2.** *Statutory Due Date* = 15 days from the end of the wage month
+            (EPF Scheme 1952, Para 38).
+
+            **3.** *Status* (Allowed/Disallowed) compares the challan-generation date to
+            the due date, as a proxy for timeliness of deposit. This is relevant to the
+            disallowance of employees' PF contribution under **Section 36(1)(va) read with
+            Section 2(24)(x)** of the Income-tax Act, 1961, where the employees' share must
+            be deposited by the due date under the relevant Act to be allowed as a
+            deduction.
+
+            **4.** Before relying on this for a tax audit / Form 3CD report, please verify
+            the actual date of remittance (bank UTR / payment date) – it can differ from
+            the challan generation date shown here.
+
+            **Output workbook** has three sheets:
+            1. *EPF Challan Summary* – colour-coded, one row per challan
+            2. *Dashboard* – KPI cards + charts (trend, contribution mix, subscriber
+               growth, compliance)
+            3. *Notes* – methodology / caveats
+            """
+        )
 
 
 if __name__ == "__main__":
