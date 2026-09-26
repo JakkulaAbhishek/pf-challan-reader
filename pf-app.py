@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 EPF Combined Challan Extractor
 ================================
@@ -49,6 +50,17 @@ the deposit date, and compares it against the statutory due date (15 days
 from the end of the wage month, per EPF Scheme para 38). Verify the real
 bank payment/UTR date before relying on this for a tax audit report -
 see the "Note" column in the output for this caveat.
+
+Output workbook has three sheets:
+    1. "EPF Challan Summary" - colour-coded, one row per challan
+    2. "Dashboard"            - KPI cards + charts (trend, contribution
+                                 mix, subscriber growth, compliance)
+    3. "Notes"                - methodology / caveats
+
+--------------------------------------------------------------------
+Author   : Jakkula Abhishek
+Email    : jakkulaabhishek5@gmail.com
+--------------------------------------------------------------------
 """
 
 import argparse
@@ -66,10 +78,29 @@ except ImportError:
 
 try:
     from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
+    from openpyxl.chart import BarChart, LineChart, PieChart, Reference
+    from openpyxl.chart.label import DataLabelList
+    from openpyxl.formatting.rule import CellIsRule
 except ImportError:
     sys.exit("Missing dependency. Install with:  pip install openpyxl")
+
+AUTHOR_NAME = "Jakkula Abhishek"
+AUTHOR_EMAIL = "jakkulaabhishek5@gmail.com"
+BRAND_TITLE = "EPF Challan Compliance & Analytics Report"
+
+# Brand colour palette
+CLR_PRIMARY = "1F4E78"     # deep blue - title band
+CLR_ACCENT = "2E75B6"      # medium blue - header row
+CLR_ACCENT2 = "9DC3E6"     # light blue - sub headers
+CLR_GOLD = "FFC000"        # gold - branding highlight
+CLR_GREEN = "C6EFCE"       # allowed
+CLR_GREEN_TXT = "006100"
+CLR_RED = "FFC7CE"         # disallowed
+CLR_RED_TXT = "9C0006"
+CLR_BAND = "EDF3FB"        # light banding for alternate rows
+CLR_WHITE = "FFFFFF"
 
 
 MONTHS = {
@@ -236,15 +267,61 @@ def gather_pdfs(input_path):
     sys.exit(f"'{input_path}' is not a PDF file or a folder containing PDFs.")
 
 
+def _thin_border():
+    side = Side(style="thin", color="B4C6E7")
+    return Border(left=side, right=side, top=side, bottom=side)
+
+
+def _brand_banner(ws, ncols, subtitle):
+    """Draws the two-row coloured branding banner used on every sheet."""
+    last_col = get_column_letter(ncols)
+    ws.merge_cells(f"A1:{last_col}1")
+    ws.merge_cells(f"A2:{last_col}2")
+
+    title_cell = ws["A1"]
+    title_cell.value = BRAND_TITLE.upper()
+    title_cell.font = Font(bold=True, size=18, name="Arial", color=CLR_WHITE)
+    title_cell.fill = PatternFill(start_color=CLR_PRIMARY, end_color=CLR_PRIMARY, fill_type="solid")
+    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 34
+
+    sub_cell = ws["A2"]
+    sub_cell.value = subtitle
+    sub_cell.font = Font(bold=True, italic=True, size=11, name="Arial", color=CLR_PRIMARY)
+    sub_cell.fill = PatternFill(start_color=CLR_GOLD, end_color=CLR_GOLD, fill_type="solid")
+    sub_cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[2].height = 20
+
+
+def _kpi_card(ws, row, col, label, value, number_format, fill_color):
+    """Draws a 2-row-tall, 2-col-wide coloured KPI card starting at (row, col)."""
+    c1 = get_column_letter(col)
+    c2 = get_column_letter(col + 1)
+    ws.merge_cells(f"{c1}{row}:{c2}{row}")
+    ws.merge_cells(f"{c1}{row + 1}:{c2}{row + 1}")
+
+    label_cell = ws[f"{c1}{row}"]
+    label_cell.value = label
+    label_cell.font = Font(bold=True, size=10, name="Arial", color=CLR_WHITE)
+    label_cell.fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+    label_cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    value_cell = ws[f"{c1}{row + 1}"]
+    value_cell.value = value
+    value_cell.number_format = number_format
+    value_cell.font = Font(bold=True, size=16, name="Arial", color=CLR_PRIMARY)
+    value_cell.fill = PatternFill(start_color=CLR_WHITE, end_color=CLR_WHITE, fill_type="solid")
+    value_cell.alignment = Alignment(horizontal="center", vertical="center")
+    value_cell.border = _thin_border()
+    ws.row_dimensions[row].height = 16
+    ws.row_dimensions[row + 1].height = 26
+
+
 def write_excel(records, out_path):
     records = sorted(
         records,
         key=lambda r: (r.get("wage_year") or 0, r.get("wage_month_num") or 0),
     )
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "EPF Challan Summary"
 
     headers = [
         "Wage Month", "Establishment Code", "Establishment Name",
@@ -256,23 +333,39 @@ def write_excel(records, out_path):
         "Days Late (+) / Early (-)", "Status",
         "Source File", "Page",
     ]
-    ws.append(headers)
+    ncols = len(headers)
 
-    header_font = Font(bold=True, name="Arial", color="FFFFFF")
-    header_fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
-    for col_idx, _ in enumerate(headers, start=1):
-        cell = ws.cell(row=1, column=col_idx)
+    TITLE_ROW, SUBTITLE_ROW, HEADER_ROW, DATA_START_ROW = 1, 2, 4, 5
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "EPF Challan Summary"
+
+    _brand_banner(
+        ws, ncols,
+        f"Prepared by {AUTHOR_NAME}   |   {AUTHOR_EMAIL}   |   "
+        f"Generated {datetime.now().strftime('%d-%b-%Y')}",
+    )
+
+    header_font = Font(bold=True, name="Arial", color=CLR_WHITE, size=11)
+    header_fill = PatternFill(start_color=CLR_ACCENT, end_color=CLR_ACCENT, fill_type="solid")
+    for col_idx, h in enumerate(headers, start=1):
+        cell = ws.cell(row=HEADER_ROW, column=col_idx, value=h)
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    ws.freeze_panes = "A2"
+        cell.border = _thin_border()
+    ws.row_dimensions[HEADER_ROW].height = 30
+    ws.freeze_panes = f"A{DATA_START_ROW}"
 
-    allowed_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-    disallowed_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-    normal_font = Font(name="Arial")
+    allowed_fill = PatternFill(start_color=CLR_GREEN, end_color=CLR_GREEN, fill_type="solid")
+    disallowed_fill = PatternFill(start_color=CLR_RED, end_color=CLR_RED, fill_type="solid")
+    band_fill = PatternFill(start_color=CLR_BAND, end_color=CLR_BAND, fill_type="solid")
+    normal_font = Font(name="Arial", size=10)
+    border = _thin_border()
 
-    row_idx = 2
-    for r in records:
+    row_idx = DATA_START_ROW
+    for i, r in enumerate(records):
         days_diff = None
         if r["generated_on"] and r["due_date"]:
             days_diff = (r["generated_on"].date() - r["due_date"]).days
@@ -297,16 +390,21 @@ def write_excel(records, out_path):
             r.get("source_file"),
             r.get("page"),
         ]
-        ws.append(row)
+        for col_idx, val in enumerate(row, start=1):
+            c = ws.cell(row=row_idx, column=col_idx, value=val)
+            c.font = normal_font
+            c.border = border
+            c.alignment = Alignment(horizontal="center", vertical="center")
+            if i % 2 == 1:
+                c.fill = band_fill
 
         status_cell = ws.cell(row=row_idx, column=headers.index("Status") + 1)
+        status_cell.font = Font(name="Arial", size=10, bold=True,
+                                 color=CLR_GREEN_TXT if r.get("status") == "Allowed" else CLR_RED_TXT)
         if r.get("status") == "Allowed":
             status_cell.fill = allowed_fill
         elif r.get("status") == "Disallowed":
             status_cell.fill = disallowed_fill
-
-        for col_idx in range(1, len(headers) + 1):
-            ws.cell(row=row_idx, column=col_idx).font = normal_font
 
         for col_name in ("Administration Charges", "Employer's Share Total",
                           "Employee's Share Total", "Grand Total", "EPF Wages"):
@@ -315,26 +413,201 @@ def write_excel(records, out_path):
 
         row_idx += 1
 
+    last_data_row = row_idx - 1
+
     # Totals row
     total_row = row_idx
-    ws.cell(row=total_row, column=1, value="TOTAL").font = Font(bold=True, name="Arial")
+    total_fill = PatternFill(start_color=CLR_ACCENT2, end_color=CLR_ACCENT2, fill_type="solid")
+    tot_label = ws.cell(row=total_row, column=1, value="TOTAL")
+    tot_label.font = Font(bold=True, name="Arial", color=CLR_PRIMARY)
+    tot_label.fill = total_fill
+    for col_idx in range(1, ncols + 1):
+        ws.cell(row=total_row, column=col_idx).fill = total_fill
+        ws.cell(row=total_row, column=col_idx).border = border
     for col_name in ("Administration Charges", "Employer's Share Total",
                       "Employee's Share Total", "Grand Total"):
         col_letter = get_column_letter(headers.index(col_name) + 1)
         cell = ws.cell(row=total_row, column=headers.index(col_name) + 1)
-        cell.value = f"=SUM({col_letter}2:{col_letter}{row_idx - 1})"
-        cell.font = Font(bold=True, name="Arial")
+        cell.value = f"=SUM({col_letter}{DATA_START_ROW}:{col_letter}{last_data_row})"
+        cell.font = Font(bold=True, name="Arial", color=CLR_PRIMARY)
         cell.number_format = "#,##0.00"
 
     # Column widths
-    widths = [14, 16, 26, 12, 12, 12, 10, 12, 14, 16, 16, 12, 18, 14, 14, 12, 30, 6]
+    widths = [14, 16, 26, 12, 12, 12, 10, 12, 16, 18, 18, 14, 18, 14, 16, 12, 30, 6]
     for col_idx, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col_idx)].width = w
+    ws.sheet_view.showGridLines = False
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.print_title_rows = f"{HEADER_ROW}:{HEADER_ROW}"
 
+    # ------------------------------------------------------------------
+    # Dashboard sheet - KPIs + charts
+    # ------------------------------------------------------------------
+    dash = wb.create_sheet("Dashboard")
+    dash.sheet_view.showGridLines = False
+    dash.page_setup.orientation = "landscape"
+    dash.page_setup.fitToWidth = 1
+    dash.page_setup.fitToHeight = 0
+    dash.sheet_properties.pageSetUpPr.fitToPage = True
+    dash_ncols = 14
+    _brand_banner(
+        dash, dash_ncols,
+        f"Prepared by {AUTHOR_NAME}   |   {AUTHOR_EMAIL}",
+    )
+
+    n = len(records)
+    total_grand = sum(r.get("grand_total") or 0 for r in records)
+    total_admin = sum(r.get("admin_charges_total") or 0 for r in records)
+    total_employer = sum(r.get("employer_share_total") or 0 for r in records)
+    total_employee = sum(r.get("employee_share_total") or 0 for r in records)
+    allowed_count = sum(1 for r in records if r.get("status") == "Allowed")
+    disallowed_count = sum(1 for r in records if r.get("status") == "Disallowed")
+    compliance_pct = (allowed_count / n) if n else 0
+
+    dash["A4"] = "Key Highlights"
+    dash["A4"].font = Font(bold=True, size=13, name="Arial", color=CLR_PRIMARY)
+    dash.merge_cells("A4:F4")
+
+    kpi_row = 5
+    _kpi_card(dash, kpi_row, 1, "MONTHS COVERED", n, "0", CLR_PRIMARY)
+    _kpi_card(dash, kpi_row, 3, "TOTAL REMITTANCE (\u20b9)", total_grand, "#,##0", CLR_ACCENT)
+    _kpi_card(dash, kpi_row, 5, "EMPLOYER'S SHARE (\u20b9)", total_employer, "#,##0", "2E7D32")
+    _kpi_card(dash, kpi_row, 7, "EMPLOYEE'S SHARE (\u20b9)", total_employee, "#,##0", "C55A11")
+    _kpi_card(dash, kpi_row, 9, "ADMIN CHARGES (\u20b9)", total_admin, "#,##0", "7030A0")
+    _kpi_card(dash, kpi_row, 11, "ON-TIME COMPLIANCE", compliance_pct, "0.0%",
+              "006100" if compliance_pct >= 0.9 else CLR_RED_TXT)
+
+    for col_idx, w in enumerate([2] * dash_ncols, start=1):
+        pass  # widths set below after chart placement
+
+    # Hidden helper table for pie chart (contribution mix) and status counts
+    helper_row0 = 40
+    dash.cell(row=helper_row0, column=1, value="Component").font = Font(bold=True, name="Arial")
+    dash.cell(row=helper_row0, column=2, value="Amount").font = Font(bold=True, name="Arial")
+    mix = [
+        ("Administration Charges", total_admin),
+        ("Employer's Share", total_employer),
+        ("Employee's Share", total_employee),
+    ]
+    for i, (label, val) in enumerate(mix, start=1):
+        dash.cell(row=helper_row0 + i, column=1, value=label)
+        dash.cell(row=helper_row0 + i, column=2, value=val)
+
+    status_row0 = helper_row0 + 6
+    dash.cell(row=status_row0, column=1, value="Status").font = Font(bold=True, name="Arial")
+    dash.cell(row=status_row0, column=2, value="Count").font = Font(bold=True, name="Arial")
+    dash.cell(row=status_row0 + 1, column=1, value="Allowed")
+    dash.cell(row=status_row0 + 1, column=2, value=allowed_count)
+    dash.cell(row=status_row0 + 2, column=1, value="Disallowed")
+    dash.cell(row=status_row0 + 2, column=2, value=disallowed_count)
+
+    # References back into the data sheet
+    data_sheet = "EPF Challan Summary"
+    cat_ref = Reference(ws, min_col=1, min_row=DATA_START_ROW, max_row=last_data_row)
+    month_col = headers.index("Wage Month") + 1
+    admin_col = headers.index("Administration Charges") + 1
+    employer_col = headers.index("Employer's Share Total") + 1
+    employee_col = headers.index("Employee's Share Total") + 1
+    grand_col = headers.index("Grand Total") + 1
+    subs_col = headers.index("EPF Subscribers") + 1
+    cats = Reference(ws, min_col=month_col, min_row=DATA_START_ROW, max_row=last_data_row)
+
+    # Chart 1: Grand Total trend (line)
+    line = LineChart()
+    line.title = "Grand Total Remittance Trend (\u20b9)"
+    line.style = 12
+    line.y_axis.title = "Amount (\u20b9)"
+    line.x_axis.title = "Wage Month"
+    line.height, line.width = 9, 18
+    data = Reference(ws, min_col=grand_col, min_row=HEADER_ROW, max_row=last_data_row)
+    line.add_data(data, titles_from_data=True)
+    line.set_categories(cats)
+    for s in line.series:
+        s.smooth = False
+        s.marker.symbol = "circle"
+        s.graphicalProperties.line.width = 25000
+        s.graphicalProperties.line.solidFill = CLR_ACCENT
+    dash.add_chart(line, "A9")
+
+    # Chart 2: Employer vs Employee vs Admin (clustered bar)
+    bar = BarChart()
+    bar.type = "col"
+    bar.grouping = "clustered"
+    bar.title = "Employer vs Employee Contribution vs Admin Charges by Month"
+    bar.style = 10
+    bar.y_axis.title = "Amount (\u20b9)"
+    bar.x_axis.title = "Wage Month"
+    bar.height, bar.width = 9, 18
+    for col, name, color in (
+        (admin_col, "Administration Charges", "7030A0"),
+        (employer_col, "Employer's Share", "2E7D32"),
+        (employee_col, "Employee's Share", "C55A11"),
+    ):
+        d = Reference(ws, min_col=col, min_row=HEADER_ROW, max_row=last_data_row)
+        bar.add_data(d, titles_from_data=True)
+    bar.set_categories(cats)
+    for s, color in zip(bar.series, ("7030A0", "2E7D32", "C55A11")):
+        s.graphicalProperties.solidFill = color
+    dash.add_chart(bar, "A28")
+
+    # Chart 3: Contribution mix (pie)
+    pie = PieChart()
+    pie.title = "Overall Contribution Mix"
+    pie.height, pie.width = 9, 10
+    pie_data = Reference(dash, min_col=2, min_row=helper_row0, max_row=helper_row0 + 3)
+    pie_cats = Reference(dash, min_col=1, min_row=helper_row0 + 1, max_row=helper_row0 + 3)
+    pie.add_data(pie_data, titles_from_data=True)
+    pie.set_categories(pie_cats)
+    pie.dataLabels = DataLabelList()
+    pie.dataLabels.showPercent = True
+    dash.add_chart(pie, "N9")
+
+    # Chart 4: Subscriber growth (bar)
+    subs_bar = BarChart()
+    subs_bar.type = "col"
+    subs_bar.title = "EPF Subscriber Count by Month"
+    subs_bar.style = 11
+    subs_bar.y_axis.title = "Subscribers"
+    subs_bar.x_axis.title = "Wage Month"
+    subs_bar.height, subs_bar.width = 9, 10
+    subs_data = Reference(ws, min_col=subs_col, min_row=HEADER_ROW, max_row=last_data_row)
+    subs_bar.add_data(subs_data, titles_from_data=True)
+    subs_bar.set_categories(cats)
+    for s in subs_bar.series:
+        s.graphicalProperties.solidFill = CLR_GOLD
+    dash.add_chart(subs_bar, "N28")
+
+    # Chart 5: Compliance status (bar)
+    comp_bar = BarChart()
+    comp_bar.type = "col"
+    comp_bar.title = "Deposit Compliance: Allowed vs Disallowed"
+    comp_bar.style = 10
+    comp_bar.y_axis.title = "No. of Months"
+    comp_bar.height, comp_bar.width = 9, 10
+    comp_data = Reference(dash, min_col=2, min_row=status_row0, max_row=status_row0 + 2)
+    comp_cats = Reference(dash, min_col=1, min_row=status_row0 + 1, max_row=status_row0 + 2)
+    comp_bar.add_data(comp_data, titles_from_data=True)
+    comp_bar.set_categories(comp_cats)
+    dash.add_chart(comp_bar, "V9")
+
+    for col_idx in range(1, dash_ncols + 1):
+        dash.column_dimensions[get_column_letter(col_idx)].width = 11
+
+    # ------------------------------------------------------------------
     # Notes sheet
+    # ------------------------------------------------------------------
     notes = wb.create_sheet("Notes")
-    notes["A1"] = "Notes"
-    notes["A1"].font = Font(bold=True, size=14, name="Arial")
+    notes.sheet_view.showGridLines = False
+    notes.page_setup.orientation = "landscape"
+    notes.page_setup.fitToWidth = 1
+    notes.page_setup.fitToHeight = 0
+    notes.sheet_properties.pageSetUpPr.fitToPage = True
+    _brand_banner(notes, 6, f"Prepared by {AUTHOR_NAME}   |   {AUTHOR_EMAIL}")
+    notes["A4"] = "Methodology & Notes"
+    notes["A4"].font = Font(bold=True, size=13, name="Arial", color=CLR_PRIMARY)
     notes_text = [
         "",
         "1. 'Challan Generated On' is the date EPFO's system generated the challan from the"
@@ -349,10 +622,14 @@ def write_excel(records, out_path):
         "4. Before relying on this for a tax audit / Form 3CD report, please verify the actual"
         " date of remittance (bank UTR / payment date) - it can differ from the challan"
         " generation date shown here.",
+        "",
+        f"Report prepared by: {AUTHOR_NAME}  ({AUTHOR_EMAIL})",
     ]
-    for i, line in enumerate(notes_text, start=2):
-        notes.cell(row=i, column=1, value=line).font = Font(name="Arial")
-    notes.column_dimensions["A"].width = 120
+    for i, line_txt in enumerate(notes_text, start=6):
+        cell = notes.cell(row=i, column=1, value=line_txt)
+        cell.font = Font(name="Arial", bold=line_txt.startswith("Report prepared"))
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
+    notes.column_dimensions["A"].width = 130
 
     wb.save(out_path)
 
